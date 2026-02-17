@@ -15,7 +15,7 @@ const openai = new OpenAI({
 
 const FFMPEG_PATH = "/tmp/ffmpeg";
 const FFMPEG_URL =
-  "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/linux-x64.gz";
+  "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64.gz";
 
 /**
  * Download a static ffmpeg binary to /tmp if not already there.
