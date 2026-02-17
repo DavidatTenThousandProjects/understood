@@ -28,6 +28,13 @@ export async function getFileInfo(fileId: string) {
 }
 
 /**
+ * Pin a message in a Slack channel.
+ */
+export async function pinMessage(channel: string, timestamp: string) {
+  return slackClient.pins.add({ channel, timestamp });
+}
+
+/**
  * Download a file from Slack using the bot token for auth.
  * Returns the file as a Buffer.
  */

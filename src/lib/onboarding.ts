@@ -8,19 +8,19 @@ import { sanitize } from "./sanitize";
  * Flow:
  * - Step 0: Not started yet.
  * - Step 1: Welcome sent, waiting for business name.
- * - Steps 2-7: Answering questions one at a time.
- * - Step 8: Collecting copy examples. User says "done" → advance to 9.
- * - Step 9: Voice profile extracted. Onboarding complete.
+ * - Steps 2-6: Answering questions one at a time.
+ * - Step 7: Collecting copy examples. User says "done" → advance to 8.
+ * - Step 8: Voice profile extracted. Onboarding complete.
  */
+
 const QUESTIONS: Record<number, string> = {
-  1: "Welcome to Understood! I'm going to learn about your business and your ad copy style so I can write perfectly voiced Meta ad copy from your videos.\n\nLet's get started. *What's your business or product name?*",
+  1: "Let's build your brand profile. *What's your business name?*",
   2: "*In one sentence, what do you sell?*",
-  3: "*Who is your ideal customer? Describe them.*",
+  3: "*Who's your ideal customer?*",
   4: "*What makes you different from competitors?*",
   5: "*What's your price point and offer?* (e.g., $49/mo for unlimited access)",
   6: "*What tone should your ads have?* (e.g., confident, playful, authoritative, casual)",
-  7: "Great — now paste any *customer research, testimonials, or reviews* you want me to learn from. If you don't have any, just say \"skip\".",
-  8: "Last step: *Paste 5+ examples of ad copy you're happy with.* These can be your own ads, competitor ads you admire, or any copy that represents how you want to sound.\n\nSend as many messages as you need. When you're done, say *\"done\"*.",
+  7: "Last step — paste *3+ examples of ad copy* you like. These can be your own ads, competitor ads you admire, or any copy that represents how you want to sound.\n\nSend as many messages as you want, then say *done*.",
 };
 
 const STEP_TO_FIELD: Record<number, string> = {
@@ -30,8 +30,10 @@ const STEP_TO_FIELD: Record<number, string> = {
   4: "differentiator",
   5: "price_and_offer",
   6: "tone_preference",
-  7: "customer_research",
 };
+
+const TOTAL_QUESTIONS = 6;
+const MIN_EXAMPLES = 3;
 
 /**
  * Get or create a customer record for a Slack user.
@@ -57,8 +59,7 @@ export async function getOrCreateCustomer(slackUserId: string) {
 
 /**
  * Start onboarding in a channel thread.
- * Called when someone uploads a video but has no voice profile.
- * Returns the thread timestamp so replies go in the same thread.
+ * Called when someone says "setup" in a channel.
  */
 export async function startOnboardingInThread(
   slackUserId: string,
@@ -70,17 +71,16 @@ export async function startOnboardingInThread(
   // Don't restart if already onboarding or complete
   if (customer.onboarding_step > 0) return;
 
-  // Post welcome as a thread reply
+  // Post first question as a thread reply
   await postMessage(channelId, QUESTIONS[1], parentTs);
 
-  // Store parentTs as the thread identifier — all replies in a thread share
-  // the parent message's ts as their thread_ts.
   await supabase
     .from("customers")
     .update({
       onboarding_step: 1,
       onboarding_channel: channelId,
       onboarding_thread_ts: parentTs,
+      active_thread_type: "onboarding",
     })
     .eq("slack_user_id", slackUserId);
 }
@@ -97,11 +97,12 @@ export async function isOnboardingThread(
 
   const { data } = await supabase
     .from("customers")
-    .select("onboarding_channel, onboarding_thread_ts, onboarding_complete")
+    .select("onboarding_channel, onboarding_thread_ts, onboarding_complete, active_thread_type")
     .eq("slack_user_id", slackUserId)
     .single();
 
   if (!data || data.onboarding_complete) return false;
+  if (data.active_thread_type !== "onboarding") return false;
 
   return (
     data.onboarding_channel === channelId &&
@@ -112,7 +113,6 @@ export async function isOnboardingThread(
 /**
  * Handle a message during onboarding.
  * Works in both DMs and channel threads.
- * threadTs is used for channel threads to keep replies in the thread.
  */
 export async function handleOnboardingMessage(
   slackUserId: string,
@@ -138,6 +138,7 @@ export async function handleOnboardingMessage(
         onboarding_step: 1,
         onboarding_channel: channelId,
         onboarding_thread_ts: threadTs || result?.ts || null,
+        active_thread_type: "onboarding",
       })
       .eq("slack_user_id", slackUserId);
 
@@ -147,8 +148,8 @@ export async function handleOnboardingMessage(
   // Use the stored thread for replies
   const replyThread = threadTs || customer.onboarding_thread_ts || undefined;
 
-  // Steps 1-7: Save answer and ask next question
-  if (step >= 1 && step <= 7) {
+  // Steps 1-6: Save answer and ask next question with progress
+  if (step >= 1 && step <= TOTAL_QUESTIONS) {
     const field = STEP_TO_FIELD[step];
     if (field) {
       const value = text.toLowerCase() === "skip" ? null : sanitize(text);
@@ -163,46 +164,70 @@ export async function handleOnboardingMessage(
 
     const nextQuestion = QUESTIONS[step + 1];
     if (nextQuestion) {
-      await postMessage(channelId, nextQuestion, replyThread);
+      // Add progress indicator for steps 1-6
+      const progress = step < TOTAL_QUESTIONS
+        ? `Got it.  [Step ${step + 1} of ${TOTAL_QUESTIONS}]\n\n${nextQuestion}`
+        : `Got it.  [Step ${step} of ${TOTAL_QUESTIONS}]\n\n${nextQuestion}`;
+      await postMessage(channelId, progress, replyThread);
     }
     return "handled";
   }
 
-  // Step 8: Collecting copy examples
-  if (step === 8) {
+  // Step 7: Collecting copy examples
+  if (step === 7) {
     if (text.toLowerCase().trim() === "done") {
+      const exampleCount = customer.copy_example_count || 0;
+
+      if (exampleCount < MIN_EXAMPLES) {
+        await postMessage(
+          channelId,
+          `I need at least ${MIN_EXAMPLES} examples to build a good voice profile. You've sent ${exampleCount} so far. Keep pasting, then say *done*.`,
+          replyThread
+        );
+        return "handled";
+      }
+
       await supabase
         .from("customers")
         .update({
-          onboarding_step: 9,
+          onboarding_step: 8,
           onboarding_complete: true,
+          active_thread_type: null,
         })
         .eq("slack_user_id", slackUserId);
 
       await postMessage(
         channelId,
-        "Got it! I'm analyzing your copy examples and building your voice profile. Give me a moment...",
+        "Building your voice profile...",
         replyThread
       );
       return "done";
     }
 
-    // Append example
+    // Append example to copy_examples
     const { data: fresh } = await supabase
       .from("customers")
-      .select("customer_research")
+      .select("copy_examples, copy_example_count")
       .eq("slack_user_id", slackUserId)
       .single();
 
-    const existing = fresh?.customer_research || "";
+    const existing = fresh?.copy_examples || "";
+    const count = (fresh?.copy_example_count || 0) + 1;
     const separator = existing ? "\n\n---\n\n" : "";
 
     await supabase
       .from("customers")
       .update({
-        customer_research: existing + separator + sanitize(text),
+        copy_examples: existing + separator + sanitize(text),
+        copy_example_count: count,
       })
       .eq("slack_user_id", slackUserId);
+
+    await postMessage(
+      channelId,
+      `Got it (${count} example${count === 1 ? "" : "s"} so far). Keep going, or say *done* when you're finished.`,
+      replyThread
+    );
 
     return "handled";
   }

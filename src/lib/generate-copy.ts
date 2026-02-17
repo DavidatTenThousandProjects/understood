@@ -1,10 +1,12 @@
 import { anthropic } from "./anthropic";
 import { supabase } from "./supabase";
 import { sanitize } from "./sanitize";
+import { getBrandNotes } from "./context";
 import type { CopyVariant } from "./types";
 
 /**
- * Generate 4 Meta ad copy variants from a transcript + voice profile.
+ * Generate 4 Meta ad copy variants from a transcript + channel voice profile.
+ * Includes accumulated brand notes for compound learning.
  */
 export async function generateCopy(
   slackUserId: string,
@@ -13,11 +15,11 @@ export async function generateCopy(
   channelId: string,
   messageTs: string
 ): Promise<CopyVariant[]> {
-  // Get voice profile
+  // Get voice profile by channel (not user)
   const { data: profile } = await supabase
     .from("voice_profiles")
     .select("*")
-    .eq("slack_user_id", slackUserId)
+    .eq("channel_id", channelId)
     .order("created_at", { ascending: false })
     .limit(1)
     .single();
@@ -26,6 +28,9 @@ export async function generateCopy(
     throw new Error("NO_PROFILE");
   }
 
+  // Get accumulated brand notes for this channel
+  const brandNotes = await getBrandNotes(channelId);
+
   const anglesStr = Array.isArray(profile.value_prop_angles)
     ? profile.value_prop_angles
         .map((a: unknown, i: number) =>
@@ -33,6 +38,10 @@ export async function generateCopy(
         )
         .join("\n")
     : "1. Cost savings\n2. Time savings\n3. Quality/creativity\n4. Convenience";
+
+  const brandNotesSection = brandNotes
+    ? `\nADDITIONAL BRAND CONTEXT (accumulated from team messages):\n<brand_notes>\n${sanitize(brandNotes)}\n</brand_notes>\n`
+    : "";
 
   const systemPrompt = `You are an expert Meta Ads copywriter. Your ONLY task is to write ad copy variants based on a business voice profile and a video transcript.
 
@@ -54,7 +63,7 @@ VOICE PROFILE:
 - Must include these phrases/terms: ${JSON.stringify(profile.mandatory_phrases)}
 - Never use these words: ${JSON.stringify(profile.banned_phrases)}
 - CTA style: ${sanitize(profile.cta_language || "")}
-
+${brandNotesSection}
 VARIANT ANGLES:
 ${anglesStr}
 
@@ -64,6 +73,7 @@ OUTPUT RULES:
 - Description: One sentence restating the offer
 - Primary Text: 3-5 short paragraphs following the structure in the voice profile
 - Match the tone and patterns EXACTLY
+- If brand notes contain feedback or preferences, apply them
 - Return ONLY valid JSON array: [{"angle": "...", "headline": "...", "description": "...", "primary_text": "..."}]
 - No markdown, no explanation, just the JSON array`;
 
@@ -82,7 +92,6 @@ OUTPUT RULES:
   const responseText =
     response.content[0].type === "text" ? response.content[0].text : "";
 
-  // Parse JSON from response
   const jsonStr = responseText.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
   const variants: CopyVariant[] = JSON.parse(jsonStr);
 

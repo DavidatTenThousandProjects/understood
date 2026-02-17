@@ -17,7 +17,8 @@ export interface SlackEventCallback {
 
 export type SlackEvent =
   | SlackFileSharedEvent
-  | SlackMessageEvent;
+  | SlackMessageEvent
+  | SlackMemberJoinedEvent;
 
 export interface SlackFileSharedEvent {
   type: "file_shared";
@@ -38,6 +39,16 @@ export interface SlackMessageEvent {
   thread_ts?: string;
   ts: string;
   event_ts: string;
+}
+
+export interface SlackMemberJoinedEvent {
+  type: "member_joined_channel";
+  user: string;
+  channel: string;
+  channel_type: "C" | "G";
+  team: string;
+  event_ts: string;
+  inviter?: string;
 }
 
 export interface SlackFileInfo {
@@ -66,6 +77,7 @@ export interface VoiceProfile {
   id: string;
   customer_id: string;
   slack_user_id: string;
+  channel_id?: string;
   name: string;
   headline_patterns: string[];
   description_patterns: string[];

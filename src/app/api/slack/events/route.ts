@@ -1,19 +1,28 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
-import { postMessage, getFileInfo, downloadFile } from "@/lib/slack";
+import { postMessage, getFileInfo, downloadFile, pinMessage } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
 import {
   handleOnboardingMessage,
   startOnboardingInThread,
   isOnboardingThread,
 } from "@/lib/onboarding";
+import { parseCommand, executeCommand, shouldStartOnboarding } from "@/lib/commands";
+import { addBrandNote } from "@/lib/context";
+import { handleCopyFeedback, isCopyThread } from "@/lib/copy-feedback";
 import { supabase } from "@/lib/supabase";
-import { extractVoiceProfile, getVoiceProfile } from "@/lib/voice-profile";
+import { extractVoiceProfile, getVoiceProfileByChannel } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
-import { formatVariantsForSlack } from "@/lib/format-slack";
+import {
+  formatVariantsForSlack,
+  formatWelcomeMessage,
+  formatTeamMemberWelcome,
+} from "@/lib/format-slack";
 import type { SlackUrlVerification, SlackEventCallback } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
 
 const MEDIA_EXTENSIONS = [
   "mp4", "mp3", "m4a", "wav", "webm", "mov", "ogg", "flac",
@@ -21,14 +30,12 @@ const MEDIA_EXTENSIONS = [
 
 /**
  * Deduplicate events using Supabase.
- * Serverless functions can't use in-memory Sets because each invocation may be a different instance.
  */
 async function isDuplicate(eventId: string): Promise<boolean> {
   const { error } = await supabase
     .from("processed_events")
     .insert({ event_id: eventId });
 
-  // If insert fails with unique violation, it's a duplicate
   if (error?.code === "23505") return true;
   if (error) console.error("Dedup check error:", error.message);
   return false;
@@ -54,12 +61,34 @@ export async function POST(request: NextRequest) {
   if (body.type === "event_callback") {
     const { event, event_id } = body;
 
-    // Deduplicate using Supabase (persists across serverless invocations)
     if (await isDuplicate(event_id)) {
       return NextResponse.json({ ok: true });
     }
 
-    // Handle file_shared event (video upload → transcribe → generate copy)
+    // ─── Bot joined a channel → post & pin welcome message ───
+    if (event.type === "member_joined_channel") {
+      if (event.user === BOT_USER_ID) {
+        after(async () => {
+          try {
+            await handleBotJoined(event.channel);
+          } catch (err) {
+            console.error("Error handling bot join:", err);
+          }
+        });
+      } else {
+        // Human joined → welcome with profile overview if available
+        after(async () => {
+          try {
+            await handleMemberJoined(event.user, event.channel);
+          } catch (err) {
+            console.error("Error handling member join:", err);
+          }
+        });
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // ─── File shared → video processing ───
     if (event.type === "file_shared") {
       after(async () => {
         try {
@@ -76,14 +105,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // Handle messages — DMs and channel threads
-    // Skip bot messages (bot_id or subtype set)
+    // ─── Messages (skip bot messages) ───
     if (
       event.type === "message" &&
       !event.subtype &&
       !event.bot_id
     ) {
-      // DM messages — onboarding or general help
+      // --- DM messages ---
       if (event.channel_type === "im") {
         after(async () => {
           try {
@@ -95,7 +123,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // Channel/group messages — check if it's an onboarding thread
+      // --- Channel/group thread messages ---
       if (
         (event.channel_type === "channel" || event.channel_type === "group") &&
         event.thread_ts
@@ -114,14 +142,68 @@ export async function POST(request: NextRequest) {
         });
         return NextResponse.json({ ok: true });
       }
+
+      // --- Top-level channel messages (no thread) ---
+      if (
+        (event.channel_type === "channel" || event.channel_type === "group") &&
+        !event.thread_ts
+      ) {
+        after(async () => {
+          try {
+            await handleChannelMessage(
+              event.user,
+              event.channel,
+              event.text,
+              event.ts
+            );
+          } catch (err) {
+            console.error("Error handling channel message:", err);
+          }
+        });
+        return NextResponse.json({ ok: true });
+      }
     }
   }
 
   return NextResponse.json({ ok: true });
 }
 
+// ─────────────────────────────────────────────
+// Event handlers
+// ─────────────────────────────────────────────
+
 /**
- * Handle a DM from a user — either onboarding or general help.
+ * Bot was added to a channel → post welcome and pin it.
+ */
+async function handleBotJoined(channelId: string) {
+  const result = await postMessage(channelId, formatWelcomeMessage());
+  if (result?.ts) {
+    try {
+      await pinMessage(channelId, result.ts);
+    } catch (err) {
+      console.error("Failed to pin welcome message:", err);
+    }
+  }
+}
+
+/**
+ * A human joined a channel → welcome with profile overview if available.
+ */
+async function handleMemberJoined(userId: string, channelId: string) {
+  const profile = await getVoiceProfileByChannel(channelId);
+
+  if (profile) {
+    await postMessage(channelId, formatTeamMemberWelcome(profile));
+  } else {
+    await postMessage(
+      channelId,
+      "Welcome! Check the pinned message to see how Understood works."
+    );
+  }
+}
+
+/**
+ * Handle a DM — onboarding or general help.
  */
 async function handleDM(
   userId: string,
@@ -139,22 +221,24 @@ async function handleDM(
 
   if (result === "handled") return;
 
-  // Onboarding complete — handle general messages
-  if (text.toLowerCase().includes("help")) {
-    await postMessage(
-      channelId,
-      "*How to use Understood:*\n\n1. Upload a video ad to any channel I'm in\n2. I'll transcribe it and generate 4 ad copy variants in your voice\n\nThat's it!"
-    );
-  } else {
-    await postMessage(
-      channelId,
-      "Upload a video to any channel I'm in, and I'll generate ad copy for it. Say \"help\" for more info."
-    );
+  // Post-onboarding: check for commands
+  const command = parseCommand(text);
+  if (command === "help") {
+    const { formatHelpMessage } = await import("@/lib/format-slack");
+    await postMessage(channelId, formatHelpMessage());
+    return;
   }
+
+  // Fallback
+  await postMessage(
+    channelId,
+    "Not sure what you need. You can upload a video to a channel I'm in for ad copy, or say *help* for more info."
+  );
 }
 
 /**
- * Handle a message in a channel thread — route to onboarding if it's an active onboarding thread.
+ * Handle a message in a channel thread.
+ * Routes to: onboarding thread, copy feedback thread, or ignore.
  */
 async function handleChannelThread(
   userId: string,
@@ -164,19 +248,76 @@ async function handleChannelThread(
 ) {
   if (!text) return;
 
+  // Check if it's an onboarding thread
   const inOnboarding = await isOnboardingThread(userId, channelId, threadTs);
-  if (!inOnboarding) return;
-
-  const result = await handleOnboardingMessage(userId, channelId, text, threadTs);
-
-  if (result === "done") {
-    await finishOnboarding(userId, channelId, threadTs);
+  if (inOnboarding) {
+    const result = await handleOnboardingMessage(userId, channelId, text, threadTs);
+    if (result === "done") {
+      await finishOnboarding(userId, channelId, threadTs);
+    }
+    return;
   }
+
+  // Check if it's a copy generation thread (for feedback)
+  const isCopy = await isCopyThread(channelId, threadTs);
+  if (isCopy) {
+    await handleCopyFeedback(userId, channelId, text, threadTs);
+    return;
+  }
+
+  // Otherwise ignore thread messages
+}
+
+/**
+ * Handle a top-level channel message (not in a thread).
+ * Routes to: commands, brand context, or helpful fallback.
+ */
+async function handleChannelMessage(
+  userId: string,
+  channelId: string,
+  text: string,
+  messageTs: string
+) {
+  if (!text) return;
+
+  // Check for commands
+  const command = parseCommand(text);
+  if (command) {
+    if (command === "setup") {
+      // Check if we should start onboarding
+      const shouldStart = await shouldStartOnboarding(userId, channelId);
+      if (shouldStart) {
+        await startOnboardingInThread(userId, channelId, messageTs);
+      } else {
+        await executeCommand(command, userId, channelId, messageTs);
+      }
+    } else {
+      await executeCommand(command, userId, channelId, messageTs);
+    }
+    return;
+  }
+
+  // Not a command — treat as brand context if substantial
+  if (text.trim().length > 10) {
+    await addBrandNote(channelId, userId, text);
+    await postMessage(
+      channelId,
+      "Noted — I'll keep this in mind for future copy.",
+      messageTs
+    );
+    return;
+  }
+
+  // Too short — helpful fallback
+  await postMessage(
+    channelId,
+    "Not sure what you mean. You can upload a video for ad copy, or send me brand context (pricing, tone, phrases to use or avoid) to improve my output.",
+    messageTs
+  );
 }
 
 /**
  * Finish onboarding — extract voice profile and notify user.
- * Works in both DMs and channel threads.
  */
 async function finishOnboarding(
   userId: string,
@@ -184,8 +325,15 @@ async function finishOnboarding(
   threadTs?: string
 ) {
   try {
-    const { summary } = await extractVoiceProfile(userId);
+    const { summary } = await extractVoiceProfile(userId, channelId);
     await postMessage(channelId, summary, threadTs);
+
+    // Post the "you're ready" confirmation
+    await postMessage(
+      channelId,
+      "Your brand profile is ready. Upload any video or audio ad to this channel and I'll generate 4 copy variants in your voice.\n\nYou can also send me context anytime — pricing changes, new taglines, words to avoid. I learn from every message and get better over time.",
+      threadTs
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await postMessage(
@@ -193,17 +341,16 @@ async function finishOnboarding(
       `I had trouble analyzing your examples: ${msg}\n\nTry sending me more examples and say "done" again.`,
       threadTs
     );
-    // Reset to step 8 so they can try again
+    // Reset to step 7 so they can try again
     await supabase
       .from("customers")
-      .update({ onboarding_step: 8, onboarding_complete: false })
+      .update({ onboarding_step: 7, onboarding_complete: false, active_thread_type: "onboarding" })
       .eq("slack_user_id", userId);
   }
 }
 
 /**
  * Handle a file upload — transcribe and generate copy.
- * If the user hasn't onboarded yet, start onboarding in a thread.
  */
 async function handleFileShared(
   fileId: string,
@@ -215,8 +362,7 @@ async function handleFileShared(
     const file = await getFileInfo(fileId);
     if (!file) return;
 
-    // The event_ts from file_shared is NOT the message ts.
-    // Get the actual message ts from file shares so threading works.
+    // Get the actual message ts from file shares for threading
     const fileShares = (file as Record<string, unknown>).shares as
       | { public?: Record<string, { ts: string }[]>; private?: Record<string, { ts: string }[]> }
       | undefined;
@@ -238,11 +384,14 @@ async function handleFileShared(
       return;
     }
 
-    // Check if user has a voice profile
-    const profile = await getVoiceProfile(userId);
+    // Check if channel has a voice profile
+    const profile = await getVoiceProfileByChannel(channelId);
     if (!profile) {
-      // Start onboarding right here in a thread under their upload
-      await startOnboardingInThread(userId, channelId, messageTs);
+      await postMessage(
+        channelId,
+        "I don't have a brand profile for this channel yet. Say *setup* in this channel to get started — it takes about 3 minutes.",
+        messageTs
+      );
       return;
     }
 
@@ -276,7 +425,7 @@ async function handleFileShared(
       messageTs
     );
 
-    // Post formatted variants
+    // Post formatted variants with feedback instructions
     const formatted = formatVariantsForSlack(variants, filename);
     await postMessage(channelId, formatted, messageTs);
   } catch (error) {
@@ -284,8 +433,11 @@ async function handleFileShared(
     console.error("Error processing file:", errMsg);
 
     if (errMsg === "NO_PROFILE") {
-      // Start onboarding in-thread as fallback
-      await startOnboardingInThread(userId, channelId, eventTs).catch(() => {});
+      await postMessage(
+        channelId,
+        "I don't have a brand profile for this channel yet. Say *setup* to get started.",
+        eventTs
+      ).catch(() => {});
     } else {
       await postMessage(channelId, `Error: ${errMsg}`, eventTs).catch(() => {});
     }
