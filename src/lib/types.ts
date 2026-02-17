@@ -35,6 +35,7 @@ export interface SlackMessageEvent {
   user: string;
   channel: string;
   channel_type: "im" | "channel" | "group";
+  thread_ts?: string;
   ts: string;
   event_ts: string;
 }

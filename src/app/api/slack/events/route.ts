@@ -2,7 +2,11 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
 import { postMessage, getFileInfo, downloadFile } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
-import { handleOnboardingMessage } from "@/lib/onboarding";
+import {
+  handleOnboardingMessage,
+  startOnboardingInThread,
+  isOnboardingThread,
+} from "@/lib/onboarding";
 import { supabase } from "@/lib/supabase";
 import { extractVoiceProfile, getVoiceProfile } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
@@ -72,23 +76,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // Handle DM messages (onboarding flow)
-    // Skip bot messages — when the bot posts, Slack fires a message event too.
-    // Bot messages have bot_id or subtype set.
+    // Handle messages — DMs and channel threads
+    // Skip bot messages (bot_id or subtype set)
     if (
       event.type === "message" &&
       !event.subtype &&
-      !event.bot_id &&
-      event.channel_type === "im"
+      !event.bot_id
     ) {
-      after(async () => {
-        try {
-          await handleDM(event.user, event.channel, event.text);
-        } catch (err) {
-          console.error("Error handling DM:", err);
-        }
-      });
-      return NextResponse.json({ ok: true });
+      // DM messages — onboarding or general help
+      if (event.channel_type === "im") {
+        after(async () => {
+          try {
+            await handleDM(event.user, event.channel, event.text);
+          } catch (err) {
+            console.error("Error handling DM:", err);
+          }
+        });
+        return NextResponse.json({ ok: true });
+      }
+
+      // Channel/group messages — check if it's an onboarding thread
+      if (
+        (event.channel_type === "channel" || event.channel_type === "group") &&
+        event.thread_ts
+      ) {
+        after(async () => {
+          try {
+            await handleChannelThread(
+              event.user,
+              event.channel,
+              event.text,
+              event.thread_ts!
+            );
+          } catch (err) {
+            console.error("Error handling channel thread:", err);
+          }
+        });
+        return NextResponse.json({ ok: true });
+      }
     }
   }
 
@@ -108,22 +133,7 @@ async function handleDM(
   const result = await handleOnboardingMessage(userId, channelId, text);
 
   if (result === "done") {
-    // User said "done" — extract voice profile
-    try {
-      const { summary } = await extractVoiceProfile(userId);
-      await postMessage(channelId, summary);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await postMessage(
-        channelId,
-        `I had trouble analyzing your examples: ${msg}\n\nTry sending me more examples and say "done" again.`
-      );
-      // Reset to step 8 so they can try again
-      await supabase
-        .from("customers")
-        .update({ onboarding_step: 8, onboarding_complete: false })
-        .eq("slack_user_id", userId);
-    }
+    await finishOnboarding(userId, channelId);
     return;
   }
 
@@ -144,7 +154,56 @@ async function handleDM(
 }
 
 /**
+ * Handle a message in a channel thread — route to onboarding if it's an active onboarding thread.
+ */
+async function handleChannelThread(
+  userId: string,
+  channelId: string,
+  text: string,
+  threadTs: string
+) {
+  if (!text) return;
+
+  const inOnboarding = await isOnboardingThread(userId, channelId, threadTs);
+  if (!inOnboarding) return;
+
+  const result = await handleOnboardingMessage(userId, channelId, text, threadTs);
+
+  if (result === "done") {
+    await finishOnboarding(userId, channelId, threadTs);
+  }
+}
+
+/**
+ * Finish onboarding — extract voice profile and notify user.
+ * Works in both DMs and channel threads.
+ */
+async function finishOnboarding(
+  userId: string,
+  channelId: string,
+  threadTs?: string
+) {
+  try {
+    const { summary } = await extractVoiceProfile(userId);
+    await postMessage(channelId, summary, threadTs);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await postMessage(
+      channelId,
+      `I had trouble analyzing your examples: ${msg}\n\nTry sending me more examples and say "done" again.`,
+      threadTs
+    );
+    // Reset to step 8 so they can try again
+    await supabase
+      .from("customers")
+      .update({ onboarding_step: 8, onboarding_complete: false })
+      .eq("slack_user_id", userId);
+  }
+}
+
+/**
  * Handle a file upload — transcribe and generate copy.
+ * If the user hasn't onboarded yet, start onboarding in a thread.
  */
 async function handleFileShared(
   fileId: string,
@@ -174,11 +233,8 @@ async function handleFileShared(
     // Check if user has a voice profile
     const profile = await getVoiceProfile(userId);
     if (!profile) {
-      await postMessage(
-        channelId,
-        "You need to set up your voice profile first. *Send me a DM* to get started!",
-        eventTs
-      );
+      // Start onboarding right here in a thread under their upload
+      await startOnboardingInThread(userId, channelId, eventTs);
       return;
     }
 
@@ -220,11 +276,8 @@ async function handleFileShared(
     console.error("Error processing file:", errMsg);
 
     if (errMsg === "NO_PROFILE") {
-      await postMessage(
-        channelId,
-        "You need to set up your voice profile first. *Send me a DM* to get started!",
-        eventTs
-      ).catch(() => {});
+      // Start onboarding in-thread as fallback
+      await startOnboardingInThread(userId, channelId, eventTs).catch(() => {});
     } else {
       await postMessage(channelId, `Error: ${errMsg}`, eventTs).catch(() => {});
     }

@@ -3,13 +3,13 @@ import { postMessage } from "./slack";
 import { sanitize } from "./sanitize";
 
 /**
- * Onboarding questions asked one-at-a-time via DM.
+ * Onboarding questions — works in DMs or in-channel threads.
  *
  * Flow:
- * - Step 0: User sends any message → we send welcome + ask business name. Advance to step 1.
- * - Step 1: User replies with business name → save, ask next question. Advance to step 2.
- * - Steps 2-7: Same pattern — save answer, ask next question.
- * - Step 8: Collecting copy examples (multi-message). User says "done" → advance to 9.
+ * - Step 0: Not started yet.
+ * - Step 1: Welcome sent, waiting for business name.
+ * - Steps 2-7: Answering questions one at a time.
+ * - Step 8: Collecting copy examples. User says "done" → advance to 9.
  * - Step 9: Voice profile extracted. Onboarding complete.
  */
 const QUESTIONS: Record<number, string> = {
@@ -23,8 +23,6 @@ const QUESTIONS: Record<number, string> = {
   8: "Last step: *Paste 5+ examples of ad copy you're happy with.* These can be your own ads, competitor ads you admire, or any copy that represents how you want to sound.\n\nSend as many messages as you need. When you're done, say *\"done\"*.",
 };
 
-// Maps onboarding step to the database column the PREVIOUS answer saves to.
-// When we're AT step N, the user's message answers question N, and we save to the mapped field.
 const STEP_TO_FIELD: Record<number, string> = {
   1: "business_name",
   2: "product_description",
@@ -58,35 +56,98 @@ export async function getOrCreateCustomer(slackUserId: string) {
 }
 
 /**
- * Handle a DM message during onboarding.
- * Returns "handled" | "done" | "not_onboarding"
+ * Start onboarding in a channel thread.
+ * Called when someone uploads a video but has no voice profile.
+ * Returns the thread timestamp so replies go in the same thread.
+ */
+export async function startOnboardingInThread(
+  slackUserId: string,
+  channelId: string,
+  parentTs: string
+): Promise<void> {
+  const customer = await getOrCreateCustomer(slackUserId);
+
+  // Don't restart if already onboarding or complete
+  if (customer.onboarding_step > 0) return;
+
+  // Post welcome as a thread reply
+  await postMessage(channelId, QUESTIONS[1], parentTs);
+
+  // Store parentTs as the thread identifier — all replies in a thread share
+  // the parent message's ts as their thread_ts.
+  await supabase
+    .from("customers")
+    .update({
+      onboarding_step: 1,
+      onboarding_channel: channelId,
+      onboarding_thread_ts: parentTs,
+    })
+    .eq("slack_user_id", slackUserId);
+}
+
+/**
+ * Check if a channel message is part of an active onboarding thread.
+ */
+export async function isOnboardingThread(
+  slackUserId: string,
+  channelId: string,
+  threadTs: string | undefined
+): Promise<boolean> {
+  if (!threadTs) return false;
+
+  const { data } = await supabase
+    .from("customers")
+    .select("onboarding_channel, onboarding_thread_ts, onboarding_complete")
+    .eq("slack_user_id", slackUserId)
+    .single();
+
+  if (!data || data.onboarding_complete) return false;
+
+  return (
+    data.onboarding_channel === channelId &&
+    data.onboarding_thread_ts === threadTs
+  );
+}
+
+/**
+ * Handle a message during onboarding.
+ * Works in both DMs and channel threads.
+ * threadTs is used for channel threads to keep replies in the thread.
  */
 export async function handleOnboardingMessage(
   slackUserId: string,
   channelId: string,
-  text: string
+  text: string,
+  threadTs?: string
 ): Promise<"handled" | "done" | "not_onboarding"> {
   const customer = await getOrCreateCustomer(slackUserId);
 
-  // Already fully onboarded
   if (customer.onboarding_complete) {
     return "not_onboarding";
   }
 
   const step = customer.onboarding_step || 0;
 
-  // Step 0: First ever message. Send welcome + first question. Don't process their text.
+  // Step 0: First DM message. Send welcome. Don't process their text.
   if (step === 0) {
+    const result = await postMessage(channelId, QUESTIONS[1], threadTs);
+
     await supabase
       .from("customers")
-      .update({ onboarding_step: 1 })
+      .update({
+        onboarding_step: 1,
+        onboarding_channel: channelId,
+        onboarding_thread_ts: threadTs || result?.ts || null,
+      })
       .eq("slack_user_id", slackUserId);
 
-    await postMessage(channelId, QUESTIONS[1]);
     return "handled";
   }
 
-  // Steps 1-7: Save their answer and ask the next question
+  // Use the stored thread for replies
+  const replyThread = threadTs || customer.onboarding_thread_ts || undefined;
+
+  // Steps 1-7: Save answer and ask next question
   if (step >= 1 && step <= 7) {
     const field = STEP_TO_FIELD[step];
     if (field) {
@@ -102,12 +163,12 @@ export async function handleOnboardingMessage(
 
     const nextQuestion = QUESTIONS[step + 1];
     if (nextQuestion) {
-      await postMessage(channelId, nextQuestion);
+      await postMessage(channelId, nextQuestion, replyThread);
     }
     return "handled";
   }
 
-  // Step 8: Collecting copy examples (multi-message)
+  // Step 8: Collecting copy examples
   if (step === 8) {
     if (text.toLowerCase().trim() === "done") {
       await supabase
@@ -120,12 +181,13 @@ export async function handleOnboardingMessage(
 
       await postMessage(
         channelId,
-        "Got it! I'm analyzing your copy examples and building your voice profile. Give me a moment..."
+        "Got it! I'm analyzing your copy examples and building your voice profile. Give me a moment...",
+        replyThread
       );
       return "done";
     }
 
-    // Append to customer_research as examples
+    // Append example
     const { data: fresh } = await supabase
       .from("customers")
       .select("customer_research")
