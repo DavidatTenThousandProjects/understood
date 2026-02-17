@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
-import { postMessage, getFileInfo, downloadFile, pinMessage, getMessage } from "@/lib/slack";
+import { postMessage, updateMessage, getFileInfo, downloadFile, pinMessage, getMessage } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
 import { analyzeAdImage } from "@/lib/analyze-image";
 import {
@@ -420,16 +420,19 @@ async function handleFileShared(
       return;
     }
 
-    await postMessage(
+    // Post initial status message and capture ts for updates
+    const statusMsg = await postMessage(
       channelId,
       isImage ? "Analyzing your ad creative..." : "Processing your video...",
       messageTs
     );
+    const statusTs = statusMsg?.ts;
 
     // Download
     const downloadUrl = file.url_private_download || file.url_private;
     if (!downloadUrl) {
-      await postMessage(channelId, "Couldn't access that file.", messageTs);
+      if (statusTs) await updateMessage(channelId, statusTs, "Couldn't access that file.").catch(() => {});
+      else await postMessage(channelId, "Couldn't access that file.", messageTs);
       return;
     }
     const fileBuffer = await downloadFile(downloadUrl as string);
@@ -443,18 +446,19 @@ async function handleFileShared(
       sourceType = "image";
     } else {
       // Transcribe video/audio
+      if (statusTs) await updateMessage(channelId, statusTs, "Transcribing audio...").catch(() => {});
       const transcript = await transcribeVideo(fileBuffer, filename);
       if (!transcript || transcript.trim().length === 0) {
-        await postMessage(
-          channelId,
-          "I couldn't detect any speech in that video. Try a video with clear audio.",
-          messageTs
-        );
+        if (statusTs) await updateMessage(channelId, statusTs, "I couldn't detect any speech in that video. Try a video with clear audio.").catch(() => {});
+        else await postMessage(channelId, "I couldn't detect any speech in that video. Try a video with clear audio.", messageTs);
         return;
       }
       contentDescription = transcript;
       sourceType = "video";
     }
+
+    // Update status → writing copy
+    if (statusTs) await updateMessage(channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
 
     // Generate copy
     const variants = await generateCopy(
@@ -466,6 +470,9 @@ async function handleFileShared(
       sourceType,
       userNotes || undefined
     );
+
+    // Remove the status message and post results
+    if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your copy:").catch(() => {});
 
     // Post formatted variants with feedback instructions
     const formatted = formatVariantsForSlack(variants, filename);

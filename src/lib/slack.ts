@@ -20,6 +20,21 @@ export async function postMessage(
 }
 
 /**
+ * Update an existing message in Slack.
+ */
+export async function updateMessage(
+  channel: string,
+  ts: string,
+  text: string
+) {
+  return slackClient.chat.update({
+    channel,
+    ts,
+    text,
+  });
+}
+
+/**
  * Get file info from Slack (includes the download URL).
  */
 export async function getFileInfo(fileId: string) {
