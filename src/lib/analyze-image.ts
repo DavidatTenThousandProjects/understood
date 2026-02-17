@@ -24,7 +24,7 @@ export async function analyzeAdImage(
   const base64 = imageBuffer.toString("base64");
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-4-6",
+    model: "claude-sonnet-4-5-20250929",
     max_tokens: 1500,
     messages: [
       {
