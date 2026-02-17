@@ -115,12 +115,12 @@ async function handleFileShared(
       return;
     }
 
-    // 3. Check file size (Whisper limit: 25MB)
+    // 3. Check file size (Slack free plan limit is ~1GB, but be reasonable)
     const sizeMB = (file.size || 0) / (1024 * 1024);
-    if (sizeMB > 25) {
+    if (sizeMB > 500) {
       await postMessage(
         channelId,
-        `Sorry, that file is too large (${sizeMB.toFixed(1)}MB). Whisper supports files up to 25MB.`,
+        `That file is ${sizeMB.toFixed(0)}MB — too large to process. Try a file under 500MB.`,
         eventTs
       );
       return;
