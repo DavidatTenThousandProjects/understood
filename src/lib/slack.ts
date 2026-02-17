@@ -35,6 +35,33 @@ export async function pinMessage(channel: string, timestamp: string) {
 }
 
 /**
+ * Get a single message by its timestamp from a channel.
+ * Used to retrieve the text accompanying a file upload.
+ */
+export async function getMessage(channel: string, messageTs: string) {
+  const result = await slackClient.conversations.history({
+    channel,
+    latest: messageTs,
+    oldest: messageTs,
+    inclusive: true,
+    limit: 1,
+  });
+  return result.messages?.[0];
+}
+
+/**
+ * Get all replies in a thread.
+ */
+export async function getThreadReplies(channel: string, threadTs: string) {
+  const result = await slackClient.conversations.replies({
+    channel,
+    ts: threadTs,
+    limit: 100,
+  });
+  return result.messages || [];
+}
+
+/**
  * Download a file from Slack using the bot token for auth.
  * Returns the file as a Buffer.
  */

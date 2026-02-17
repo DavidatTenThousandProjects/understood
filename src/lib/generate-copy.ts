@@ -78,7 +78,7 @@ ${anglesStr}
 OUTPUT RULES:
 - CRITICAL: The copy MUST be about the specific content in the ${sourceType === "image" ? "image" : "video"}. Pull specific details, claims, visuals, and messaging from the ${sourceType === "image" ? "image analysis" : "transcript"} — do NOT write generic copy that could apply to any ad for this brand.
 - Each variant targets a DIFFERENT angle from the list above
-- Headline: Short, punchy, under 40 characters — tied to what the ${sourceType === "image" ? "image shows" : "video says"}
+- Headline: Short, punchy, under 40 characters — tied to what the ${sourceType === "image" ? "image shows" : "video says"}. EVERY variant MUST have a DIFFERENT headline — no duplicates.
 - Description: One sentence restating the specific offer or message from this ${sourceType === "image" ? "ad creative" : "video"}
 - Primary Text: 3-5 short paragraphs following the structure in the voice profile, but grounded in the actual content
 - Use the tone and patterns from the voice profile, but the SUBSTANCE must come from the ${sourceType === "image" ? "image" : "transcript"}
@@ -87,7 +87,7 @@ OUTPUT RULES:
 - No markdown, no explanation, just the JSON array`;
 
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-5-20250929",
+    model: "claude-opus-4-6",
     max_tokens: 3000,
     system: systemPrompt,
     messages: [

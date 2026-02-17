@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
-import { postMessage, getFileInfo, downloadFile, pinMessage } from "@/lib/slack";
+import { postMessage, getFileInfo, downloadFile, pinMessage, getMessage } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
 import { analyzeAdImage } from "@/lib/analyze-image";
 import {
@@ -377,10 +377,16 @@ async function handleFileShared(
     const messageTs = shareList?.[0]?.ts || eventTs;
 
     // Capture any notes the user typed alongside the upload
-    const initialComment = (file as Record<string, unknown>).initial_comment as
-      | { comment?: string }
-      | undefined;
-    const userNotes = initialComment?.comment || "";
+    // Fetch the actual message to get its text (file_shared event doesn't include it)
+    let userNotes = "";
+    try {
+      const msg = await getMessage(channelId, messageTs);
+      if (msg?.text && msg.text.trim().length > 0) {
+        userNotes = msg.text;
+      }
+    } catch {
+      // Couldn't fetch message text — proceed without notes
+    }
 
     const filename = file.name || "unknown";
     const extension = filename.split(".").pop()?.toLowerCase() || "";
