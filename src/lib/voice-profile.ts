@@ -128,35 +128,37 @@ OFFER: ${sanitize(customer.price_and_offer || "")}`;
     if (error) throw new Error(`Failed to save voice profile: ${error.message}`);
   }
 
-  const summary = formatProfileSummary(profile, customer.business_name);
+  const summary = formatProfileSummary(profile, customer);
   return { profile, summary };
 }
 
 function formatProfileSummary(
   profile: Record<string, unknown>,
-  businessName: string
+  customer: Record<string, unknown>
 ): string {
-  const angles = (profile.value_prop_angles as string[]) || [];
-  const mandatory = (profile.mandatory_phrases as string[]) || [];
-  const banned = (profile.banned_phrases as string[]) || [];
+  const businessName = customer.business_name || "Your Brand";
+  const angles = (profile.value_prop_angles as Array<string | { label?: string; description?: string }>) || [];
 
-  return `*Voice Profile for ${businessName}*
+  const formattedAngles = angles.map((a, i) => {
+    if (typeof a === "string") return `  ${i + 1}. ${a}`;
+    if (a && typeof a === "object" && a.label) return `  ${i + 1}. *${a.label}* — ${a.description || ""}`;
+    return `  ${i + 1}. ${JSON.stringify(a)}`;
+  }).join("\n");
+
+  return `*Brand Profile: ${businessName}*
+
+*What you sell:* ${customer.product_description || "Not specified"}
+*Target customer:* ${customer.target_audience || "Not specified"}
+*What makes you different:* ${customer.differentiator || "Not specified"}
+*Pricing:* ${customer.price_and_offer || "Not specified"}
 
 *Tone:* ${profile.tone_description}
 
-*Headline Patterns:*
-${((profile.headline_patterns as string[]) || []).map((p) => `  - ${p}`).join("\n")}
+*Core Value Props:*
+${formattedAngles}
 
-*Primary Text Structure:*
-${((profile.primary_text_structure as string[]) || []).map((p) => `  - ${p}`).join("\n")}
-
-*Always Include:* ${mandatory.join(", ")}
-*Never Use:* ${banned.join(", ")}
-
-*CTA Style:* ${profile.cta_language}
-
-*4 Variant Angles:*
-${angles.map((a, i) => `  ${i + 1}. ${typeof a === "string" ? a : JSON.stringify(a)}`).join("\n")}`;
+———————————————————
+I'll use this profile every time I write copy for you. Send me brand context anytime to make it even better.`;
 }
 
 /**

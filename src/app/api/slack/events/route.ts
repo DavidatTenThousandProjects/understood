@@ -376,13 +376,18 @@ async function handleFileShared(
     const shareList = fileShares?.public?.[channelId] || fileShares?.private?.[channelId];
     const messageTs = shareList?.[0]?.ts || eventTs;
 
+    // Capture any notes the user typed alongside the upload
+    const initialComment = (file as Record<string, unknown>).initial_comment as
+      | { comment?: string }
+      | undefined;
+    const userNotes = initialComment?.comment || "";
+
     const filename = file.name || "unknown";
     const extension = filename.split(".").pop()?.toLowerCase() || "";
 
     if (!ALL_MEDIA_EXTENSIONS.includes(extension)) return;
 
     const isImage = IMAGE_EXTENSIONS.includes(extension);
-    const isVideo = VIDEO_EXTENSIONS.includes(extension);
 
     const sizeMB = (file.size || 0) / (1024 * 1024);
     const maxSize = isImage ? 20 : 500;
@@ -449,7 +454,8 @@ async function handleFileShared(
       filename,
       channelId,
       messageTs,
-      sourceType
+      sourceType,
+      userNotes || undefined
     );
 
     // Post formatted variants with feedback instructions

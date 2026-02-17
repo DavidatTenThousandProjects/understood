@@ -14,7 +14,8 @@ export async function generateCopy(
   videoFilename: string,
   channelId: string,
   messageTs: string,
-  sourceType: "video" | "image" = "video"
+  sourceType: "video" | "image" = "video",
+  userNotes?: string
 ): Promise<CopyVariant[]> {
   // Get voice profile by channel (not user)
   const { data: profile } = await supabase
@@ -44,6 +45,10 @@ export async function generateCopy(
     ? `\nADDITIONAL BRAND CONTEXT (accumulated from team messages):\n<brand_notes>\n${sanitize(brandNotes)}\n</brand_notes>\n`
     : "";
 
+  const userNotesSection = userNotes
+    ? `\nUSER NOTES FOR THIS SPECIFIC AD:\n<user_notes>\n${sanitize(userNotes)}\n</user_notes>\nIMPORTANT: Apply these notes to shape the copy for this specific ad.\n`
+    : "";
+
   const sourceLabel = sourceType === "image" ? "an ad image analysis" : "a video transcript";
 
   const systemPrompt = `You are an expert Meta Ads copywriter. Your ONLY task is to write ad copy variants based on a business voice profile and ${sourceLabel}.
@@ -66,16 +71,17 @@ VOICE PROFILE:
 - Must include these phrases/terms: ${JSON.stringify(profile.mandatory_phrases)}
 - Never use these words: ${JSON.stringify(profile.banned_phrases)}
 - CTA style: ${sanitize(profile.cta_language || "")}
-${brandNotesSection}
+${brandNotesSection}${userNotesSection}
 VARIANT ANGLES:
 ${anglesStr}
 
 OUTPUT RULES:
+- CRITICAL: The copy MUST be about the specific content in the ${sourceType === "image" ? "image" : "video"}. Pull specific details, claims, visuals, and messaging from the ${sourceType === "image" ? "image analysis" : "transcript"} — do NOT write generic copy that could apply to any ad for this brand.
 - Each variant targets a DIFFERENT angle from the list above
-- Headline: Short, punchy, under 40 characters
-- Description: One sentence restating the offer
-- Primary Text: 3-5 short paragraphs following the structure in the voice profile
-- Match the tone and patterns EXACTLY
+- Headline: Short, punchy, under 40 characters — tied to what the ${sourceType === "image" ? "image shows" : "video says"}
+- Description: One sentence restating the specific offer or message from this ${sourceType === "image" ? "ad creative" : "video"}
+- Primary Text: 3-5 short paragraphs following the structure in the voice profile, but grounded in the actual content
+- Use the tone and patterns from the voice profile, but the SUBSTANCE must come from the ${sourceType === "image" ? "image" : "transcript"}
 - If brand notes contain feedback or preferences, apply them
 - Return ONLY valid JSON array: [{"angle": "...", "headline": "...", "description": "...", "primary_text": "..."}]
 - No markdown, no explanation, just the JSON array`;

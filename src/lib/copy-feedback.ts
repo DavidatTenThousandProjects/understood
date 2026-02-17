@@ -6,6 +6,24 @@ import { postMessage } from "./slack";
 import type { CopyVariant } from "./types";
 
 /**
+ * Check if a message is just a positive acknowledgment (not actionable feedback).
+ */
+function isAffirmative(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[^a-z\s]/g, "").trim();
+  const affirmatives = [
+    "nice", "nice job", "nice work", "great", "great job", "great work",
+    "awesome", "perfect", "love it", "love these", "love this", "looks good",
+    "looks great", "thanks", "thank you", "thank u", "thx", "ty",
+    "good job", "good work", "well done", "amazing", "fantastic",
+    "these are great", "these are good", "these are perfect", "this is great",
+    "this is good", "this is perfect", "nailed it", "spot on", "yes",
+    "yep", "yup", "cool", "ok", "okay", "lol", "haha", "ha",
+    "fire", "solid", "sick", "dope", "chef kiss",
+  ];
+  return affirmatives.some((a) => normalized === a || normalized.startsWith(a + " "));
+}
+
+/**
  * Handle copy feedback in a generation thread.
  * Detects whether feedback targets a specific variant or all variants,
  * regenerates accordingly, and saves feedback as a brand note.
@@ -16,6 +34,12 @@ export async function handleCopyFeedback(
   text: string,
   threadTs: string
 ): Promise<void> {
+  // Don't revise on positive acknowledgments
+  if (isAffirmative(text)) {
+    await postMessage(channelId, "Glad you like it! If you want changes later, just reply here with feedback.", threadTs);
+    return;
+  }
+
   // Find the generation for this thread
   const { data: generation } = await supabase
     .from("generations")
