@@ -35,16 +35,16 @@ Want changes? Reply in this thread with feedback — I'll revise and remember fo
 export function formatWelcomeMessage(): string {
   return `*Welcome to Understood*
 
-I turn your video ads into perfectly voiced Meta ad copy. Here's how it works:
+I turn your video ads into perfectly voiced Meta ad copy. Here's how to get started:
 
-*Getting started (one time, ~3 minutes):*
-Say *setup* and I'll learn about your brand through a quick interview. Once your profile is built, you're ready to go.
+*Step 1: Build your brand profile (~3 minutes)*
+Say *setup* and I'll learn about your brand through a quick interview. This is the first thing you need to do before I can write copy for you.
 
-*Generating ad copy:*
-Upload any video or audio ad to this channel. I'll transcribe it and write 4 copy variants in your brand voice.
+*Step 2: Upload videos and get ad copy*
+Once your profile is built, upload any video or audio ad to this channel. I'll transcribe it and write 4 copy variants in your brand voice.
 
-*Improving over time:*
-Send me anything about your brand — pricing changes, new taglines, tone preferences, words to avoid. I'll remember it all and get better with every interaction.
+*Step 3: Keep improving*
+Send me anything about your brand — pricing changes, new taglines, tone preferences, words to avoid. I learn from every message and get better over time. You can also give feedback on any copy I write and I'll revise it.
 
 *Commands:*
 • *setup* — Build your brand profile

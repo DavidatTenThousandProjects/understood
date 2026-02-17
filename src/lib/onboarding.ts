@@ -20,7 +20,7 @@ const QUESTIONS: Record<number, string> = {
   4: "*What makes you different from competitors?*",
   5: "*What's your price point and offer?* (e.g., $49/mo for unlimited access)",
   6: "*What tone should your ads have?* (e.g., confident, playful, authoritative, casual)",
-  7: "Last step — paste *3+ examples of ad copy* you like. These can be your own ads, competitor ads you admire, or any copy that represents how you want to sound.\n\nSend as many messages as you want, then say *done*.",
+  7: "Last step — paste *examples of ad copy* you like. These can be your own ads, competitor ads you admire, or any copy that represents how you want to sound.\n\nSend as many messages as you want, then say *done*.\n\nDon't have examples yet? No problem — just say *done* and I'll build your voice profile from what you've told me so far. You can always improve it later.",
 };
 
 const STEP_TO_FIELD: Record<number, string> = {
@@ -33,8 +33,6 @@ const STEP_TO_FIELD: Record<number, string> = {
 };
 
 const TOTAL_QUESTIONS = 6;
-const MIN_EXAMPLES = 3;
-
 /**
  * Get or create a customer record for a Slack user.
  */
@@ -176,17 +174,6 @@ export async function handleOnboardingMessage(
   // Step 7: Collecting copy examples
   if (step === 7) {
     if (text.toLowerCase().trim() === "done") {
-      const exampleCount = customer.copy_example_count || 0;
-
-      if (exampleCount < MIN_EXAMPLES) {
-        await postMessage(
-          channelId,
-          `I need at least ${MIN_EXAMPLES} examples to build a good voice profile. You've sent ${exampleCount} so far. Keep pasting, then say *done*.`,
-          replyThread
-        );
-        return "handled";
-      }
-
       await supabase
         .from("customers")
         .update({
