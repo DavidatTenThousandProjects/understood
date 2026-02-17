@@ -1,34 +1,79 @@
 import OpenAI, { toFile } from "openai";
 import { execFile } from "child_process";
-import { writeFile, readFile, unlink } from "fs/promises";
+import { writeFile, readFile, unlink, chmod, access } from "fs/promises";
 import { join } from "path";
 import { randomUUID } from "crypto";
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const ffmpegPath = require("ffmpeg-static") as string;
+import { constants } from "fs";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
+const FFMPEG_PATH = "/tmp/ffmpeg";
+const FFMPEG_URL =
+  "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+
+/**
+ * Download a static ffmpeg binary to /tmp if not already there.
+ * Persists across warm invocations of the same serverless instance.
+ */
+async function ensureFfmpeg(): Promise<string> {
+  try {
+    await access(FFMPEG_PATH, constants.X_OK);
+    return FFMPEG_PATH;
+  } catch {
+    // Download and extract
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "sh",
+        [
+          "-c",
+          `curl -sL "${FFMPEG_URL}" | tar -xJ --strip-components=1 -C /tmp --wildcards "*/ffmpeg"`,
+        ],
+        { timeout: 30000 },
+        (error, _stdout, stderr) => {
+          if (error) {
+            reject(new Error(`Failed to download ffmpeg: ${stderr || error.message}`));
+          } else {
+            resolve();
+          }
+        }
+      );
+    });
+
+    await chmod(FFMPEG_PATH, 0o755);
+    return FFMPEG_PATH;
+  }
+}
+
 /**
  * Extract audio from a video file using ffmpeg.
  * Returns an mp3 buffer that's much smaller than the original video.
  */
-async function extractAudio(videoBuffer: Buffer, filename: string): Promise<Buffer> {
+async function extractAudio(
+  videoBuffer: Buffer,
+  filename: string
+): Promise<Buffer> {
+  const ffmpeg = await ensureFfmpeg();
   const id = randomUUID();
-  const inputPath = join("/tmp", `${id}_${filename}`);
+  const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const inputPath = join("/tmp", `${id}_${safeFilename}`);
   const outputPath = join("/tmp", `${id}_audio.mp3`);
 
   try {
-    // Write video to temp file
     await writeFile(inputPath, videoBuffer);
 
-    // Extract audio with ffmpeg
     await new Promise<void>((resolve, reject) => {
       execFile(
-        ffmpegPath as string,
-        ["-i", inputPath, "-vn", "-acodec", "libmp3lame", "-q:a", "4", outputPath, "-y"],
+        ffmpeg,
+        [
+          "-i", inputPath,
+          "-vn",
+          "-acodec", "libmp3lame",
+          "-q:a", "4",
+          outputPath,
+          "-y",
+        ],
         { timeout: 55000 },
         (error, _stdout, stderr) => {
           if (error) {
@@ -40,10 +85,8 @@ async function extractAudio(videoBuffer: Buffer, filename: string): Promise<Buff
       );
     });
 
-    // Read the extracted audio
     return await readFile(outputPath);
   } finally {
-    // Clean up temp files
     await unlink(inputPath).catch(() => {});
     await unlink(outputPath).catch(() => {});
   }
@@ -63,12 +106,13 @@ export async function transcribeVideo(
   let audioBuffer: Buffer;
   let audioFilename: string;
 
-  if (audioExtensions.includes(extension) && fileBuffer.length <= 25 * 1024 * 1024) {
-    // Already an audio file and under 25MB — send directly
+  if (
+    audioExtensions.includes(extension) &&
+    fileBuffer.length <= 25 * 1024 * 1024
+  ) {
     audioBuffer = fileBuffer;
     audioFilename = filename;
   } else {
-    // Video file or large audio — extract audio first
     audioBuffer = await extractAudio(fileBuffer, filename);
     audioFilename = filename.replace(/\.[^.]+$/, ".mp3");
   }
