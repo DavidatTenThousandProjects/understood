@@ -73,7 +73,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Handle DM messages (onboarding flow)
-    if (event.type === "message" && !event.subtype && event.channel_type === "im") {
+    // Skip bot messages — when the bot posts, Slack fires a message event too.
+    // Bot messages have bot_id or subtype set.
+    if (
+      event.type === "message" &&
+      !event.subtype &&
+      !event.bot_id &&
+      event.channel_type === "im"
+    ) {
       after(async () => {
         try {
           await handleDM(event.user, event.channel, event.text);

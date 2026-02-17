@@ -30,6 +30,7 @@ export interface SlackFileSharedEvent {
 export interface SlackMessageEvent {
   type: "message";
   subtype?: string;
+  bot_id?: string;
   text: string;
   user: string;
   channel: string;
