@@ -2,11 +2,8 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
 import { postMessage, getFileInfo, downloadFile } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
-import {
-  handleOnboardingMessage,
-  startOnboarding,
-  getOrCreateCustomer,
-} from "@/lib/onboarding";
+import { handleOnboardingMessage } from "@/lib/onboarding";
+import { supabase } from "@/lib/supabase";
 import { extractVoiceProfile, getVoiceProfile } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
 import { formatVariantsForSlack } from "@/lib/format-slack";
@@ -18,8 +15,20 @@ const MEDIA_EXTENSIONS = [
   "mp4", "mp3", "m4a", "wav", "webm", "mov", "ogg", "flac",
 ];
 
-// Track processed events to prevent duplicate handling
-const processedEvents = new Set<string>();
+/**
+ * Deduplicate events using Supabase.
+ * Serverless functions can't use in-memory Sets because each invocation may be a different instance.
+ */
+async function isDuplicate(eventId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("processed_events")
+    .insert({ event_id: eventId });
+
+  // If insert fails with unique violation, it's a duplicate
+  if (error?.code === "23505") return true;
+  if (error) console.error("Dedup check error:", error.message);
+  return false;
+}
 
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
@@ -41,13 +50,9 @@ export async function POST(request: NextRequest) {
   if (body.type === "event_callback") {
     const { event, event_id } = body;
 
-    if (processedEvents.has(event_id)) {
+    // Deduplicate using Supabase (persists across serverless invocations)
+    if (await isDuplicate(event_id)) {
       return NextResponse.json({ ok: true });
-    }
-    processedEvents.add(event_id);
-    if (processedEvents.size > 1000) {
-      const entries = Array.from(processedEvents);
-      entries.slice(0, 500).forEach((id) => processedEvents.delete(id));
     }
 
     // Handle file_shared event (video upload → transcribe → generate copy)
@@ -71,7 +76,7 @@ export async function POST(request: NextRequest) {
     if (event.type === "message" && !event.subtype && event.channel_type === "im") {
       after(async () => {
         try {
-          await handleDM(event.user, event.channel, event.text, event.ts);
+          await handleDM(event.user, event.channel, event.text);
         } catch (err) {
           console.error("Error handling DM:", err);
         }
@@ -89,51 +94,35 @@ export async function POST(request: NextRequest) {
 async function handleDM(
   userId: string,
   channelId: string,
-  text: string,
-  ts: string
+  text: string
 ) {
-  // Ignore bot messages
   if (!text) return;
 
-  const customer = await getOrCreateCustomer(userId);
+  const result = await handleOnboardingMessage(userId, channelId, text);
 
-  // If user hasn't started onboarding yet (step 0, no business name)
-  if (!customer.business_name && (customer.onboarding_step || 0) === 0) {
-    await startOnboarding(userId, channelId);
-    // Then immediately handle their message as the first answer
-    await handleOnboardingMessage(userId, channelId, text);
-    return;
-  }
-
-  // Handle onboarding flow
-  const handled = await handleOnboardingMessage(userId, channelId, text);
-
-  // If onboarding just completed (user said "done"), extract voice profile
-  if (handled) {
-    const updatedCustomer = await getOrCreateCustomer(userId);
-    if (updatedCustomer.onboarding_complete && updatedCustomer.onboarding_step === 8) {
-      try {
-        const { summary } = await extractVoiceProfile(userId);
-        await postMessage(channelId, summary);
-
-        // Advance step past 8 so we don't re-extract
-        const { supabase } = await import("@/lib/supabase");
-        await supabase
-          .from("customers")
-          .update({ onboarding_step: 9 })
-          .eq("slack_user_id", userId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await postMessage(
-          channelId,
-          `I had trouble analyzing your examples: ${msg}\n\nTry sending me more examples and say "done" again.`
-        );
-      }
+  if (result === "done") {
+    // User said "done" — extract voice profile
+    try {
+      const { summary } = await extractVoiceProfile(userId);
+      await postMessage(channelId, summary);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await postMessage(
+        channelId,
+        `I had trouble analyzing your examples: ${msg}\n\nTry sending me more examples and say "done" again.`
+      );
+      // Reset to step 8 so they can try again
+      await supabase
+        .from("customers")
+        .update({ onboarding_step: 8, onboarding_complete: false })
+        .eq("slack_user_id", userId);
     }
     return;
   }
 
-  // Onboarding is complete — handle general messages
+  if (result === "handled") return;
+
+  // Onboarding complete — handle general messages
   if (text.toLowerCase().includes("help")) {
     await postMessage(
       channelId,
