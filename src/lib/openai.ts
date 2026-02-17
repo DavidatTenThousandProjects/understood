@@ -115,10 +115,31 @@ export async function transcribeVideo(
 
   const file = await toFile(audioBuffer, audioFilename);
 
+  // Use verbose_json to get segments with no_speech probability.
+  // This lets us filter out hallucinated text over music/silence.
   const transcription = await openai.audio.transcriptions.create({
     model: "whisper-1",
     file,
+    response_format: "verbose_json",
+    temperature: 0,
   });
 
-  return transcription.text;
+  // Filter out segments where Whisper is likely hallucinating (no real speech)
+  const segments = (transcription as unknown as VerboseTranscription).segments || [];
+  const realSpeech = segments
+    .filter((seg) => seg.no_speech_prob < 0.5)
+    .map((seg) => seg.text.trim())
+    .join(" ");
+
+  return realSpeech || transcription.text;
+}
+
+interface VerboseTranscription {
+  text: string;
+  segments: Array<{
+    text: string;
+    start: number;
+    end: number;
+    no_speech_prob: number;
+  }>;
 }
