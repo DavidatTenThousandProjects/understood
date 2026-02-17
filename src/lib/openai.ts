@@ -1,9 +1,13 @@
 import OpenAI, { toFile } from "openai";
 import { execFile } from "child_process";
 import { writeFile, readFile, unlink, chmod, access } from "fs/promises";
+import { createWriteStream } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { constants } from "fs";
+import { createGunzip } from "zlib";
+import { pipeline } from "stream/promises";
+import { Readable } from "stream";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -11,36 +15,28 @@ const openai = new OpenAI({
 
 const FFMPEG_PATH = "/tmp/ffmpeg";
 const FFMPEG_URL =
-  "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+  "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/linux-x64.gz";
 
 /**
  * Download a static ffmpeg binary to /tmp if not already there.
- * Persists across warm invocations of the same serverless instance.
+ * Uses Node.js fetch + zlib — no shell tools required.
  */
 async function ensureFfmpeg(): Promise<string> {
   try {
     await access(FFMPEG_PATH, constants.X_OK);
     return FFMPEG_PATH;
   } catch {
-    // Download and extract
-    await new Promise<void>((resolve, reject) => {
-      execFile(
-        "sh",
-        [
-          "-c",
-          `curl -sL "${FFMPEG_URL}" | tar -xJ --strip-components=1 -C /tmp --wildcards "*/ffmpeg"`,
-        ],
-        { timeout: 30000 },
-        (error, _stdout, stderr) => {
-          if (error) {
-            reject(new Error(`Failed to download ffmpeg: ${stderr || error.message}`));
-          } else {
-            resolve();
-          }
-        }
-      );
-    });
+    // Download gzipped binary and decompress with Node.js
+    const response = await fetch(FFMPEG_URL, { redirect: "follow" });
+    if (!response.ok || !response.body) {
+      throw new Error(`Failed to download ffmpeg: ${response.status}`);
+    }
 
+    const nodeStream = Readable.fromWeb(response.body as import("stream/web").ReadableStream);
+    const gunzip = createGunzip();
+    const output = createWriteStream(FFMPEG_PATH);
+
+    await pipeline(nodeStream, gunzip, output);
     await chmod(FFMPEG_PATH, 0o755);
     return FFMPEG_PATH;
   }
