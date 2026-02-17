@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { postMessage } from "./slack";
+import { sanitize } from "./sanitize";
 
 /**
  * Onboarding questions asked one-at-a-time via DM.
@@ -74,7 +75,7 @@ export async function handleOnboardingMessage(
     await supabase
       .from("customers")
       .update({
-        business_name: text,
+        business_name: sanitize(text),
         onboarding_step: 1,
       })
       .eq("slack_user_id", slackUserId);
@@ -86,7 +87,7 @@ export async function handleOnboardingMessage(
   // Steps 1-6: Save answer and ask next question
   if (step >= 1 && step <= 6) {
     const field = STEP_TO_FIELD[step];
-    const value = text.toLowerCase() === "skip" ? null : text;
+    const value = text.toLowerCase() === "skip" ? null : sanitize(text);
 
     await supabase
       .from("customers")
@@ -119,7 +120,7 @@ export async function handleOnboardingMessage(
       return true; // The caller should trigger voice profile extraction
     }
 
-    // Append to customer_research as examples
+    // Append to customer_research as examples (sanitized)
     const existingExamples = customer.customer_research || "";
     const separator = existingExamples ? "\n\n---\n\n" : "";
 
@@ -127,7 +128,7 @@ export async function handleOnboardingMessage(
       .from("customers")
       .update({
         customer_research:
-          existingExamples + separator + text,
+          existingExamples + separator + sanitize(text),
       })
       .eq("slack_user_id", slackUserId);
 
