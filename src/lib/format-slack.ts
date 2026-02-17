@@ -20,7 +20,7 @@ export function formatVariantsForSlack(
 ${v.primary_text}`;
   });
 
-  const footer = "\n———————————————————\n_React with a star on your favorite variant._";
+  const footer = "\n———————————————————";
 
   return header + "\n" + blocks.join("\n\n") + footer;
 }
