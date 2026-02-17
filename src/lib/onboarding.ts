@@ -66,21 +66,25 @@ export async function startOnboardingInThread(
 ): Promise<void> {
   const customer = await getOrCreateCustomer(slackUserId);
 
-  // Don't restart if already onboarding or complete
-  if (customer.onboarding_step > 0) return;
+  // If actively mid-onboarding (not complete, step > 0), don't restart
+  if (customer.onboarding_step > 0 && !customer.onboarding_complete) return;
 
-  // Post first question as a thread reply
-  await postMessage(channelId, QUESTIONS[1], parentTs);
-
+  // Reset onboarding state for this new setup (handles re-setup in a new channel)
   await supabase
     .from("customers")
     .update({
       onboarding_step: 1,
+      onboarding_complete: false,
       onboarding_channel: channelId,
       onboarding_thread_ts: parentTs,
       active_thread_type: "onboarding",
+      copy_examples: null,
+      copy_example_count: 0,
     })
     .eq("slack_user_id", slackUserId);
+
+  // Post first question as a thread reply
+  await postMessage(channelId, QUESTIONS[1], parentTs);
 }
 
 /**
