@@ -160,10 +160,11 @@ async function handleFileShared(
       eventTs
     );
   } catch (error) {
-    console.error("Error processing file:", error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error("Error processing file:", errMsg);
     await postMessage(
       channelId,
-      "Sorry, something went wrong processing that file. Please try again.",
+      `Error: ${errMsg}`,
       eventTs
     ).catch(() => {});
   }
