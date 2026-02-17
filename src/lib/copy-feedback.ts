@@ -98,7 +98,7 @@ IMPORTANT:
       messages: [
         {
           role: "user",
-          content: `Here are the original 4 variants:\n${JSON.stringify(existingVariants)}\n\nOriginal transcript:\n${sanitize(generation.transcript)}\n\nUser feedback: "${sanitize(text)}"\n\nRevise ALL 4 variants based on this feedback. Return ONLY valid JSON array: [{"angle": "...", "headline": "...", "description": "...", "primary_text": "..."}]`,
+          content: `Here are the original 4 variants:\n${JSON.stringify(existingVariants)}\n\nOriginal ${generation.source_type === "image" ? "image analysis" : "transcript"}:\n${sanitize(generation.transcript)}\n\nUser feedback: "${sanitize(text)}"\n\nRevise ALL 4 variants based on this feedback. Return ONLY valid JSON array: [{"angle": "...", "headline": "...", "description": "...", "primary_text": "..."}]`,
         },
       ],
     });

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
 import { postMessage, getFileInfo, downloadFile, pinMessage } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
+import { analyzeAdImage } from "@/lib/analyze-image";
 import {
   handleOnboardingMessage,
   startOnboardingInThread,
@@ -24,9 +25,15 @@ export const dynamic = "force-dynamic";
 
 const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
 
-const MEDIA_EXTENSIONS = [
+const VIDEO_EXTENSIONS = [
   "mp4", "mp3", "m4a", "wav", "webm", "mov", "ogg", "flac",
 ];
+
+const IMAGE_EXTENSIONS = [
+  "jpg", "jpeg", "png", "gif", "webp",
+];
+
+const ALL_MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS];
 
 /**
  * Deduplicate events using Supabase.
@@ -350,7 +357,7 @@ async function finishOnboarding(
 }
 
 /**
- * Handle a file upload — transcribe and generate copy.
+ * Handle a file upload — video/audio (transcribe) or image (vision analyze) → generate copy.
  */
 async function handleFileShared(
   fileId: string,
@@ -372,13 +379,17 @@ async function handleFileShared(
     const filename = file.name || "unknown";
     const extension = filename.split(".").pop()?.toLowerCase() || "";
 
-    if (!MEDIA_EXTENSIONS.includes(extension)) return;
+    if (!ALL_MEDIA_EXTENSIONS.includes(extension)) return;
+
+    const isImage = IMAGE_EXTENSIONS.includes(extension);
+    const isVideo = VIDEO_EXTENSIONS.includes(extension);
 
     const sizeMB = (file.size || 0) / (1024 * 1024);
-    if (sizeMB > 500) {
+    const maxSize = isImage ? 20 : 500;
+    if (sizeMB > maxSize) {
       await postMessage(
         channelId,
-        `That file is ${sizeMB.toFixed(0)}MB — too large to process. Try a file under 500MB.`,
+        `That file is ${sizeMB.toFixed(0)}MB — too large to process. Try a file under ${maxSize}MB.`,
         messageTs
       );
       return;
@@ -395,7 +406,11 @@ async function handleFileShared(
       return;
     }
 
-    await postMessage(channelId, "Processing your video...", messageTs);
+    await postMessage(
+      channelId,
+      isImage ? "Analyzing your ad creative..." : "Processing your video...",
+      messageTs
+    );
 
     // Download
     const downloadUrl = file.url_private_download || file.url_private;
@@ -405,24 +420,36 @@ async function handleFileShared(
     }
     const fileBuffer = await downloadFile(downloadUrl as string);
 
-    // Transcribe
-    const transcript = await transcribeVideo(fileBuffer, filename);
-    if (!transcript || transcript.trim().length === 0) {
-      await postMessage(
-        channelId,
-        "I couldn't detect any speech in that video. Try a video with clear audio.",
-        messageTs
-      );
-      return;
+    let contentDescription: string;
+    let sourceType: "video" | "image";
+
+    if (isImage) {
+      // Analyze image with Claude Vision
+      contentDescription = await analyzeAdImage(fileBuffer, filename);
+      sourceType = "image";
+    } else {
+      // Transcribe video/audio
+      const transcript = await transcribeVideo(fileBuffer, filename);
+      if (!transcript || transcript.trim().length === 0) {
+        await postMessage(
+          channelId,
+          "I couldn't detect any speech in that video. Try a video with clear audio.",
+          messageTs
+        );
+        return;
+      }
+      contentDescription = transcript;
+      sourceType = "video";
     }
 
     // Generate copy
     const variants = await generateCopy(
       userId,
-      transcript,
+      contentDescription,
       filename,
       channelId,
-      messageTs
+      messageTs,
+      sourceType
     );
 
     // Post formatted variants with feedback instructions
