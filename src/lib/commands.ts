@@ -8,6 +8,7 @@ import { formatWelcomeMessage, formatProfileDisplay, formatHelpMessage } from ".
  */
 export function parseCommand(text: string): string | null {
   const lower = text.toLowerCase().trim();
+  if (lower === "new setup") return "new_setup";
   const firstWord = lower.split(/\s/)[0];
   if (["setup", "profile", "help"].includes(firstWord)) return firstWord;
   return null;
@@ -47,7 +48,7 @@ async function handleSetup(
   // Check if channel already has a voice profile
   const { data: profile } = await supabase
     .from("voice_profiles")
-    .select("name")
+    .select("name, tone_description")
     .eq("channel_id", channelId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -56,7 +57,7 @@ async function handleSetup(
   if (profile) {
     await postMessage(
       channelId,
-      `This channel already has a brand profile for *${profile.name}*. Say *profile* to see it.`,
+      `This channel already has a brand profile for *${profile.name}*.\n\n*Tone:* ${profile.tone_description || "Not set"}\n\nYou don't need to run setup again — I'm learning from every message you send. Just share brand context (pricing changes, tone preferences, new taglines) and I'll keep improving.\n\nIf you want to start completely fresh with a new profile, say *new setup*.`,
       messageTs
     );
     return;

@@ -298,6 +298,9 @@ async function handleChannelMessage(
       } else {
         await executeCommand(command, userId, channelId, messageTs);
       }
+    } else if (command === "new_setup") {
+      // Force a fresh setup even if a profile exists
+      await startOnboardingInThread(userId, channelId, messageTs);
     } else {
       await executeCommand(command, userId, channelId, messageTs);
     }
