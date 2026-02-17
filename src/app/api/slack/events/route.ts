@@ -215,6 +215,14 @@ async function handleFileShared(
     const file = await getFileInfo(fileId);
     if (!file) return;
 
+    // The event_ts from file_shared is NOT the message ts.
+    // Get the actual message ts from file shares so threading works.
+    const fileShares = (file as Record<string, unknown>).shares as
+      | { public?: Record<string, { ts: string }[]>; private?: Record<string, { ts: string }[]> }
+      | undefined;
+    const shareList = fileShares?.public?.[channelId] || fileShares?.private?.[channelId];
+    const messageTs = shareList?.[0]?.ts || eventTs;
+
     const filename = file.name || "unknown";
     const extension = filename.split(".").pop()?.toLowerCase() || "";
 
@@ -225,7 +233,7 @@ async function handleFileShared(
       await postMessage(
         channelId,
         `That file is ${sizeMB.toFixed(0)}MB — too large to process. Try a file under 500MB.`,
-        eventTs
+        messageTs
       );
       return;
     }
@@ -234,16 +242,16 @@ async function handleFileShared(
     const profile = await getVoiceProfile(userId);
     if (!profile) {
       // Start onboarding right here in a thread under their upload
-      await startOnboardingInThread(userId, channelId, eventTs);
+      await startOnboardingInThread(userId, channelId, messageTs);
       return;
     }
 
-    await postMessage(channelId, "Processing your video...", eventTs);
+    await postMessage(channelId, "Processing your video...", messageTs);
 
     // Download
     const downloadUrl = file.url_private_download || file.url_private;
     if (!downloadUrl) {
-      await postMessage(channelId, "Couldn't access that file.", eventTs);
+      await postMessage(channelId, "Couldn't access that file.", messageTs);
       return;
     }
     const fileBuffer = await downloadFile(downloadUrl as string);
@@ -254,7 +262,7 @@ async function handleFileShared(
       await postMessage(
         channelId,
         "I couldn't detect any speech in that video. Try a video with clear audio.",
-        eventTs
+        messageTs
       );
       return;
     }
@@ -265,12 +273,12 @@ async function handleFileShared(
       transcript,
       filename,
       channelId,
-      eventTs
+      messageTs
     );
 
     // Post formatted variants
     const formatted = formatVariantsForSlack(variants, filename);
-    await postMessage(channelId, formatted, eventTs);
+    await postMessage(channelId, formatted, messageTs);
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error("Error processing file:", errMsg);
