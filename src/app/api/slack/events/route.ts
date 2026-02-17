@@ -14,6 +14,7 @@ import { handleCopyFeedback, isCopyThread } from "@/lib/copy-feedback";
 import { supabase } from "@/lib/supabase";
 import { extractVoiceProfile, getVoiceProfileByChannel } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
+import { friendlyError } from "@/lib/anthropic";
 import {
   formatVariantsForSlack,
   formatWelcomeMessage,
@@ -368,6 +369,9 @@ async function handleFileShared(
   channelId: string,
   eventTs: string
 ) {
+  let statusTs: string | undefined;
+  let messageTs = eventTs;
+
   try {
     const file = await getFileInfo(fileId);
     if (!file) return;
@@ -377,7 +381,7 @@ async function handleFileShared(
       | { public?: Record<string, { ts: string }[]>; private?: Record<string, { ts: string }[]> }
       | undefined;
     const shareList = fileShares?.public?.[channelId] || fileShares?.private?.[channelId];
-    const messageTs = shareList?.[0]?.ts || eventTs;
+    messageTs = shareList?.[0]?.ts || eventTs;
 
     // Capture any notes the user typed alongside the upload
     // Fetch the actual message to get its text (file_shared event doesn't include it)
@@ -426,7 +430,7 @@ async function handleFileShared(
       isImage ? "Analyzing your ad creative..." : "Processing your video...",
       messageTs
     );
-    const statusTs = statusMsg?.ts;
+    statusTs = statusMsg?.ts;
 
     // Download
     const downloadUrl = file.url_private_download || file.url_private;
@@ -481,14 +485,18 @@ async function handleFileShared(
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error("Error processing file:", errMsg);
 
+    let userMsg: string;
     if (errMsg === "NO_PROFILE") {
-      await postMessage(
-        channelId,
-        "I don't have a brand profile for this channel yet. Say *setup* to get started.",
-        eventTs
-      ).catch(() => {});
+      userMsg = "I don't have a brand profile for this channel yet. Say *setup* to get started.";
     } else {
-      await postMessage(channelId, `Error: ${errMsg}`, eventTs).catch(() => {});
+      userMsg = friendlyError(error);
+    }
+
+    // Update the status message if we have one, otherwise post new
+    if (statusTs) {
+      await updateMessage(channelId, statusTs, userMsg).catch(() => {});
+    } else {
+      await postMessage(channelId, userMsg, messageTs).catch(() => {});
     }
   }
 }
