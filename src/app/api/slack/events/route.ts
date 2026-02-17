@@ -1,8 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
 import { postMessage, getFileInfo, downloadFile } from "@/lib/slack";
 import { transcribeVideo } from "@/lib/openai";
 import type { SlackUrlVerification, SlackEventCallback } from "@/lib/types";
+
+// Force dynamic — this is an API route, not static
+export const dynamic = "force-dynamic";
 
 // Supported video/audio file extensions
 const MEDIA_EXTENSIONS = [
@@ -56,12 +59,18 @@ export async function POST(request: NextRequest) {
 
     // Handle file_shared event
     if (event.type === "file_shared") {
-      // Process async — respond to Slack immediately to avoid retry
-      handleFileShared(
-        event.file_id,
-        event.channel_id,
-        event.event_ts
-      ).catch((err) => console.error("Error handling file_shared:", err));
+      // Use after() to keep the function alive after responding to Slack
+      after(async () => {
+        try {
+          await handleFileShared(
+            event.file_id,
+            event.channel_id,
+            event.event_ts
+          );
+        } catch (err) {
+          console.error("Error handling file_shared:", err);
+        }
+      });
 
       return NextResponse.json({ ok: true });
     }
