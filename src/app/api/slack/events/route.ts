@@ -15,6 +15,7 @@ import { supabase } from "@/lib/supabase";
 import { extractVoiceProfile, getVoiceProfileByChannel } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
 import { classifyUploadIntent, analyzeCompetitorAd } from "@/lib/analyze-competitor";
+import { extractUrl, fetchMediaFromUrl } from "@/lib/fetch-url-media";
 import { friendlyError } from "@/lib/anthropic";
 import {
   formatVariantsForSlack,
@@ -311,15 +312,12 @@ async function handleChannelMessage(
   }
 
   // Check if the message contains a URL + competitor analysis intent
-  const hasUrl = /https?:\/\/\S+/i.test(text);
-  if (hasUrl && text.trim().length > 10) {
+  const urlInMessage = extractUrl(text);
+  if (urlInMessage && text.trim().length > 10) {
     const intent = await classifyUploadIntent(text);
     if (intent === "competitor") {
-      await postMessage(
-        channelId,
-        "I can see you found a competitor ad you like! To analyze it, upload the ad here with your notes about what you like:\n\n• *Image ad* — screenshot it and drop it here\n• *Video ad* — screen-record it and drop the recording here (I'll transcribe the audio and analyze the whole thing)\n\n_On iPhone: swipe into Control Center → tap the screen record button → play the ad → stop recording → share to Slack. On Mac: Cmd+Shift+5 → record the ad → drag the file here._",
-        messageTs
-      );
+      // Try to fetch media directly from the URL
+      await handleCompetitorLink(userId, channelId, text, urlInMessage, messageTs);
       return;
     }
   }
@@ -373,6 +371,101 @@ async function finishOnboarding(
       .from("customers")
       .update({ onboarding_step: 7, onboarding_complete: false, active_thread_type: "onboarding" })
       .eq("slack_user_id", userId);
+  }
+}
+
+/**
+ * Handle a competitor ad link — try to fetch media from the URL,
+ * fall back to asking user to screenshot/screen-record.
+ */
+async function handleCompetitorLink(
+  userId: string,
+  channelId: string,
+  text: string,
+  url: string,
+  messageTs: string
+) {
+  // Check voice profile first
+  const profile = await getVoiceProfileByChannel(channelId);
+  if (!profile) {
+    await postMessage(
+      channelId,
+      "I don't have a brand profile for this channel yet. Say *setup* to get started — it takes about 3 minutes.",
+      messageTs
+    );
+    return;
+  }
+
+  const statusMsg = await postMessage(channelId, "Fetching that ad...", messageTs);
+  const statusTs = statusMsg?.ts;
+
+  try {
+    const media = await fetchMediaFromUrl(url);
+
+    if (!media) {
+      // Couldn't fetch — fall back to screenshot guidance
+      const fallbackMsg = "I couldn't grab the media from that link (the platform may have blocked it). Upload the ad directly instead:\n\n• *Image ad* — screenshot it and drop it here\n• *Video ad* — screen-record it and drop the recording here\n\n_On iPhone: swipe into Control Center → tap the screen record button → play the ad → stop recording → share to Slack._";
+      if (statusTs) await updateMessage(channelId, statusTs, fallbackMsg).catch(() => {});
+      else await postMessage(channelId, fallbackMsg, messageTs);
+      return;
+    }
+
+    // We got media — process it through the competitor analysis pipeline
+    let contentDescription: string;
+    const sourceType = media.type;
+
+    if (media.type === "image") {
+      if (statusTs) await updateMessage(channelId, statusTs, "Analyzing the ad creative...").catch(() => {});
+      contentDescription = await analyzeAdImage(media.buffer, media.filename);
+    } else {
+      if (statusTs) await updateMessage(channelId, statusTs, "Transcribing the video...").catch(() => {});
+      const transcript = await transcribeVideo(media.buffer, media.filename);
+      if (!transcript || transcript.trim().length === 0) {
+        // No speech — try to use the page description + any thumbnail analysis as fallback
+        if (media.pageDescription) {
+          contentDescription = `Video ad (no speech detected). Page description: ${media.pageDescription}`;
+        } else {
+          const msg = "I got the video but couldn't detect any speech. Try screen-recording it so I can capture the audio better.";
+          if (statusTs) await updateMessage(channelId, statusTs, msg).catch(() => {});
+          else await postMessage(channelId, msg, messageTs);
+          return;
+        }
+      } else {
+        contentDescription = transcript;
+      }
+    }
+
+    // Add page metadata to enrich the analysis
+    if (media.pageTitle || media.pageDescription) {
+      contentDescription += `\n\nPage context:\nTitle: ${media.pageTitle || "N/A"}\nDescription: ${media.pageDescription || "N/A"}`;
+    }
+
+    // Strip the URL from the user's text to get just their commentary
+    const userCommentary = text.replace(/https?:\/\/[^\s>]+/gi, "").trim();
+
+    if (statusTs) await updateMessage(channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
+
+    const analysis = await analyzeCompetitorAd(
+      contentDescription,
+      sourceType,
+      userCommentary,
+      channelId,
+      userId,
+      messageTs,
+      media.filename
+    );
+
+    if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your competitive analysis:").catch(() => {});
+
+    const formatted = formatCompetitorAnalysisForSlack(analysis, url);
+    await postMessage(channelId, formatted, messageTs);
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error("Error handling competitor link:", errMsg);
+
+    const userMsg = friendlyError(error);
+    if (statusTs) await updateMessage(channelId, statusTs, userMsg).catch(() => {});
+    else await postMessage(channelId, userMsg, messageTs).catch(() => {});
   }
 }
 
