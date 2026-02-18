@@ -72,7 +72,7 @@ Return ONLY valid JSON with these exact keys. No markdown, no explanation.`;
     response.content[0].type === "text" ? response.content[0].text : "";
 
   const jsonStr = responseText.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
-  const profile = JSON.parse(jsonStr);
+  const profile = parseJsonSafe(jsonStr);
 
   const fullContext = `BUSINESS: ${sanitize(customer.business_name || "")}
 PRODUCT: ${sanitize(customer.product_description || "")}
@@ -189,4 +189,49 @@ export async function getVoiceProfile(slackUserId: string) {
     .single();
 
   return data;
+}
+
+/**
+ * Parse JSON with fallback repair for common LLM output issues:
+ * - Trailing commas before ] or }
+ * - Unescaped newlines inside strings
+ * - Control characters
+ */
+function parseJsonSafe(raw: string): Record<string, unknown> {
+  // First try direct parse
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Fall through to repair
+  }
+
+  let cleaned = raw;
+
+  // Remove trailing commas before } or ]
+  cleaned = cleaned.replace(/,\s*([\]}])/g, "$1");
+
+  // Replace unescaped newlines inside strings with \n
+  cleaned = cleaned.replace(new RegExp('"([^"]*?)"', "gs"), (match) => {
+    return match.replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+  });
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Fall through to more aggressive repair
+  }
+
+  // Last resort: extract the JSON object between first { and last }
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const extracted = cleaned.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(extracted);
+    } catch {
+      // Give up
+    }
+  }
+
+  throw new Error("Could not parse voice profile JSON from model response");
 }
