@@ -10,7 +10,7 @@ import {
 } from "@/lib/onboarding";
 import { parseCommand, executeCommand, shouldStartOnboarding } from "@/lib/commands";
 import { addBrandNote } from "@/lib/context";
-import { handleCopyFeedback, isCopyThread } from "@/lib/copy-feedback";
+import { handleCopyFeedback, isCopyThread, getThreadSourceType, handleCompetitorFeedback } from "@/lib/copy-feedback";
 import { supabase } from "@/lib/supabase";
 import { extractVoiceProfile, getVoiceProfileByChannel } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
@@ -269,10 +269,14 @@ async function handleChannelThread(
     return;
   }
 
-  // Check if it's a copy generation thread (for feedback)
-  const isCopy = await isCopyThread(channelId, threadTs);
-  if (isCopy) {
+  // Check if it's a generation thread (copy or competitor analysis)
+  const sourceType = await getThreadSourceType(channelId, threadTs);
+  if (sourceType === "video" || sourceType === "image") {
     await handleCopyFeedback(userId, channelId, text, threadTs);
+    return;
+  }
+  if (sourceType === "competitor_analysis") {
+    await handleCompetitorFeedback(userId, channelId, text, threadTs);
     return;
   }
 

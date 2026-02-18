@@ -220,19 +220,113 @@ IMPORTANT:
 }
 
 /**
+ * Check if a thread is a generation thread and return its type.
+ * Returns null if no generation exists, or the source_type string.
+ */
+export async function getThreadSourceType(
+  channelId: string,
+  threadTs: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("generations")
+    .select("source_type")
+    .eq("slack_channel_id", channelId)
+    .eq("slack_message_ts", threadTs)
+    .limit(1)
+    .single();
+
+  return data?.source_type || null;
+}
+
+/**
  * Check if a thread is a copy generation thread.
  */
 export async function isCopyThread(
   channelId: string,
   threadTs: string
 ): Promise<boolean> {
-  const { data } = await supabase
+  const sourceType = await getThreadSourceType(channelId, threadTs);
+  return sourceType === "video" || sourceType === "image";
+}
+
+/**
+ * Handle feedback in a competitor analysis thread.
+ * Revises the brief/analysis — NOT copy variants.
+ */
+export async function handleCompetitorFeedback(
+  userId: string,
+  channelId: string,
+  text: string,
+  threadTs: string
+): Promise<void> {
+  const { data: generation } = await supabase
     .from("generations")
-    .select("id")
+    .select("*")
     .eq("slack_channel_id", channelId)
     .eq("slack_message_ts", threadTs)
+    .single();
+
+  if (!generation) return;
+
+  const { data: profile } = await supabase
+    .from("voice_profiles")
+    .select("*")
+    .eq("channel_id", channelId)
+    .order("created_at", { ascending: false })
     .limit(1)
     .single();
 
-  return !!data;
+  if (!profile) return;
+
+  const feedbackHistory = await getThreadFeedbackHistory(channelId, threadTs);
+
+  await postMessage(channelId, "Working on that...", threadTs);
+
+  const feedbackSection = feedbackHistory
+    ? `\nFULL FEEDBACK HISTORY (address ALL of these):\n${feedbackHistory}\n`
+    : "";
+
+  const previousAnalysis = generation.variants?.[0] || {};
+
+  const systemPrompt = `You are a world-class creative director. You previously analyzed a competitor ad and created a brief for a brand team. They have follow-up questions or feedback. Respond naturally and helpfully — like a creative director in a conversation with their team.
+
+BRAND CONTEXT:
+Business: ${sanitize(profile.name || "")}
+${sanitize(profile.full_context || "")}
+Tone: ${sanitize(profile.tone_description || "")}
+
+PREVIOUS ANALYSIS YOU GAVE:
+What works: ${sanitize(previousAnalysis.what_works || "")}
+Brief: ${sanitize(previousAnalysis.your_brief || "")}
+Copy direction: ${sanitize(previousAnalysis.copy_direction || "")}
+
+ORIGINAL CONTENT ANALYZED:
+${sanitize(generation.transcript || "")}
+${feedbackSection}
+Respond directly to what they're asking. If they want specific copy lines, write them. If they want the brief adjusted, adjust it. If they're asking a question, answer it. Be specific and actionable. Don't repeat the entire analysis — just address their request.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-opus-4-6",
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: sanitize(text),
+        },
+      ],
+    });
+
+    const responseText =
+      response.content[0].type === "text" ? response.content[0].text : "";
+
+    await postMessage(channelId, responseText, threadTs);
+  } catch (error) {
+    console.error("Error handling competitor feedback:", error);
+    await postMessage(channelId, friendlyError(error), threadTs);
+  }
+
+  // Save feedback as a brand note
+  await addBrandNote(channelId, userId, `Competitor analysis feedback: ${text}`);
 }
