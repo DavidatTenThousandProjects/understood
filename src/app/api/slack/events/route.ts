@@ -470,6 +470,120 @@ async function handleCompetitorLink(
 }
 
 /**
+ * Handle a reply in a thread where the user was asked what they want to do with their upload.
+ */
+async function handlePendingUploadReply(
+  userId: string,
+  channelId: string,
+  text: string,
+  threadTs: string,
+  pendingUpload: Record<string, unknown>
+) {
+  const lowerText = text.toLowerCase().trim();
+
+  // Determine intent from the reply
+  const wantsCopy = /write\s*copy|copy|captions?/i.test(lowerText);
+  const wantsAnalysis = /analy[zs]|competitor|break.*down|brief|how.*would|love.*this|style/i.test(lowerText);
+
+  if (!wantsCopy && !wantsAnalysis) {
+    // Use AI to classify if the text doesn't match simple patterns
+    const intent = await classifyUploadIntent(text);
+    if (intent === "competitor") {
+      await processPendingAsCompetitor(userId, channelId, text, threadTs, pendingUpload);
+    } else {
+      await processPendingAsCopy(userId, channelId, text, threadTs, pendingUpload);
+    }
+    return;
+  }
+
+  if (wantsAnalysis) {
+    await processPendingAsCompetitor(userId, channelId, text, threadTs, pendingUpload);
+  } else {
+    await processPendingAsCopy(userId, channelId, text, threadTs, pendingUpload);
+  }
+}
+
+async function processPendingAsCompetitor(
+  userId: string,
+  channelId: string,
+  userMessage: string,
+  threadTs: string,
+  pending: Record<string, unknown>
+) {
+  const statusMsg = await postMessage(channelId, "Analyzing this competitor ad...", threadTs);
+  const statusTs = statusMsg?.ts;
+
+  try {
+    const filename = pending.video_filename as string;
+    const ext = filename.split(".").pop()?.toLowerCase() || "";
+    const sourceType = IMAGE_EXTENSIONS.includes(ext) ? "image" as const : "video" as const;
+
+    // Delete the pending record — analyzeCompetitorAd will create the real one
+    await supabase.from("generations").delete().eq("id", pending.id);
+
+    const analysis = await analyzeCompetitorAd(
+      pending.transcript as string,
+      sourceType,
+      userMessage,
+      channelId,
+      userId,
+      threadTs,
+      filename
+    );
+
+    if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your competitive analysis:").catch(() => {});
+
+    const formatted = formatCompetitorAnalysisForSlack(analysis, filename);
+    await postMessage(channelId, formatted, threadTs);
+  } catch (error) {
+    console.error("Error processing pending as competitor:", error);
+    const msg = friendlyError(error);
+    if (statusTs) await updateMessage(channelId, statusTs, msg).catch(() => {});
+    else await postMessage(channelId, msg, threadTs);
+  }
+}
+
+async function processPendingAsCopy(
+  userId: string,
+  channelId: string,
+  userMessage: string,
+  threadTs: string,
+  pending: Record<string, unknown>
+) {
+  const statusMsg = await postMessage(channelId, "Writing copy in your brand voice...", threadTs);
+  const statusTs = statusMsg?.ts;
+
+  try {
+    const filename = pending.video_filename as string;
+    const ext = filename.split(".").pop()?.toLowerCase() || "";
+    const sourceType = IMAGE_EXTENSIONS.includes(ext) ? "image" as const : "video" as const;
+
+    // Delete the pending record — generateCopy will create its own
+    await supabase.from("generations").delete().eq("id", pending.id);
+
+    const variants = await generateCopy(
+      userId,
+      pending.transcript as string,
+      filename,
+      channelId,
+      threadTs,
+      sourceType,
+      userMessage || undefined
+    );
+
+    if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your copy:").catch(() => {});
+
+    const formatted = formatVariantsForSlack(variants, filename);
+    await postMessage(channelId, formatted, threadTs);
+  } catch (error) {
+    console.error("Error processing pending as copy:", error);
+    const msg = friendlyError(error);
+    if (statusTs) await updateMessage(channelId, statusTs, msg).catch(() => {});
+    else await postMessage(channelId, msg, threadTs);
+  }
+}
+
+/**
  * Handle a file upload — video/audio (transcribe) or image (vision analyze) → generate copy.
  */
 async function handleFileShared(
