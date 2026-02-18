@@ -310,7 +310,21 @@ async function handleChannelMessage(
     return;
   }
 
-  // Not a command — treat as brand context if substantial
+  // Check if the message contains a URL + competitor analysis intent
+  const hasUrl = /https?:\/\/\S+/i.test(text);
+  if (hasUrl && text.trim().length > 10) {
+    const intent = await classifyUploadIntent(text);
+    if (intent === "competitor") {
+      await postMessage(
+        channelId,
+        "I can see you found a competitor ad you like! To analyze it, screenshot or screen-record the ad and upload it here along with your notes about what you like. I'll break it down and create a brief your team can execute.\n\n_Tip: On mobile, screenshot the ad. On desktop, use your screen capture tool. Then drag the image into this channel with your message._",
+        messageTs
+      );
+      return;
+    }
+  }
+
+  // Not a command or competitor link — treat as brand context if substantial
   if (text.trim().length > 10) {
     await addBrandNote(channelId, userId, text);
     await postMessage(
