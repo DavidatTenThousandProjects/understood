@@ -1,0 +1,115 @@
+/**
+ * Agent pipeline types for Understood.
+ *
+ * Pipeline: Event Normalizer -> Smart Router -> Agent Dispatcher -> Specialized Agent -> Quality Gate -> Slack
+ */
+
+import type { VoiceProfile, CopyVariant, CompetitorAnalysis } from "../types";
+
+// ─── Event Context ───
+
+export interface EventContext {
+  type: "message" | "file_upload" | "command" | "member_joined";
+  userId: string;
+  channelId: string;
+  text: string;
+  threadTs: string | null;
+  parentTs: string | null;
+  fileInfo: FileContext | null;
+  isThread: boolean;
+  isDM: boolean;
+  rawEvent: unknown;
+}
+
+export interface FileContext {
+  id: string;
+  name: string;
+  mimetype: string;
+  url: string;
+  size: number;
+  mediaType: "image" | "video" | "audio" | "unknown";
+}
+
+// ─── Brand Context ───
+
+export interface BrandContext {
+  profile: VoiceProfile | null;
+  brandNotes: string;
+  threadHistory: string | null;
+  generation: GenerationRecord | null;
+  learnings: string | null;
+  channelMaturity: "new" | "onboarding" | "active";
+}
+
+export interface GenerationRecord {
+  id: string;
+  slackUserId: string;
+  voiceProfileId: string;
+  videoFilename: string;
+  transcript: string;
+  variants: CopyVariant[] | CompetitorAnalysis[];
+  slackChannelId: string;
+  slackMessageTs: string;
+  sourceType: "video" | "image" | "competitor_analysis" | "pending";
+  createdAt: string;
+}
+
+// ─── Agent Result ───
+
+export interface SlackMessage {
+  channel: string;
+  text: string;
+  threadTs?: string;
+}
+
+export interface SideEffect {
+  type: "add_brand_note" | "save_generation" | "update_profile" | "update_customer";
+  payload: Record<string, unknown>;
+}
+
+export interface AgentResult {
+  messages: SlackMessage[];
+  sideEffects?: SideEffect[];
+  triggerLearning?: boolean;
+}
+
+// ─── Router ───
+
+export type AgentName =
+  | "welcome"
+  | "command"
+  | "onboarding"
+  | "copy_generation"
+  | "competitor_analysis"
+  | "conversation"
+  | "brand_context"
+  | "learning";
+
+export interface RouteDecision {
+  agent: AgentName;
+  /** Extra metadata the router passes to the dispatcher */
+  meta?: Record<string, unknown>;
+}
+
+// ─── Quality Gate ───
+
+export interface QualityCheckResult {
+  passed: boolean;
+  issues: QualityIssue[];
+  autoFixed: boolean;
+  fixedMessages?: SlackMessage[];
+}
+
+export interface QualityIssue {
+  severity: "minor" | "major";
+  description: string;
+  autoFixable: boolean;
+}
+
+// ─── Agent Handler ───
+
+export type AgentHandler = (
+  ctx: EventContext,
+  brand: BrandContext,
+  meta?: Record<string, unknown>
+) => Promise<AgentResult>;
