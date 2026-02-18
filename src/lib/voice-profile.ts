@@ -65,14 +65,35 @@ Return ONLY valid JSON with these exact keys. No markdown, no explanation.`;
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 2000,
+    system: "You are a JSON extraction tool. You MUST respond with ONLY a valid JSON object. No markdown formatting, no code fences, no explanation text before or after. Just the raw JSON object starting with { and ending with }.",
     messages: [{ role: "user", content: prompt }],
   });
 
   const responseText =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  console.log("Voice profile raw response (first 500 chars):", responseText.slice(0, 500));
+
   const jsonStr = responseText.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
-  const profile = parseJsonSafe(jsonStr);
+
+  let profile: Record<string, unknown>;
+  try {
+    profile = parseJsonSafe(jsonStr);
+  } catch (firstError) {
+    // Retry: ask the model to fix its own JSON
+    console.error("First parse failed, retrying with repair prompt. Raw:", responseText.slice(0, 200));
+    const retryResponse = await anthropic.messages.create({
+      model: "claude-sonnet-4-5-20250929",
+      max_tokens: 2000,
+      system: "You fix broken JSON. Return ONLY the corrected JSON object. No explanation, no markdown, no code fences. Start with { and end with }.",
+      messages: [
+        { role: "user", content: `This JSON failed to parse. Fix it and return ONLY valid JSON:\n\n${responseText}` },
+      ],
+    });
+    const retryText = retryResponse.content[0].type === "text" ? retryResponse.content[0].text : "";
+    const retryJson = retryText.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+    profile = parseJsonSafe(retryJson);
+  }
 
   const fullContext = `BUSINESS: ${sanitize(customer.business_name || "")}
 PRODUCT: ${sanitize(customer.product_description || "")}
