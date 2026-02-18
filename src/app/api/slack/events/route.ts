@@ -317,7 +317,7 @@ async function handleChannelMessage(
     if (intent === "competitor") {
       await postMessage(
         channelId,
-        "I can see you found a competitor ad you like! To analyze it, screenshot or screen-record the ad and upload it here along with your notes about what you like. I'll break it down and create a brief your team can execute.\n\n_Tip: On mobile, screenshot the ad. On desktop, use your screen capture tool. Then drag the image into this channel with your message._",
+        "I can see you found a competitor ad you like! To analyze it, upload the ad here with your notes about what you like:\n\n• *Image ad* — screenshot it and drop it here\n• *Video ad* — screen-record it and drop the recording here (I'll transcribe the audio and analyze the whole thing)\n\n_On iPhone: swipe into Control Center → tap the screen record button → play the ad → stop recording → share to Slack. On Mac: Cmd+Shift+5 → record the ad → drag the file here._",
         messageTs
       );
       return;
