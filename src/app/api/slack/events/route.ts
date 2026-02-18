@@ -14,9 +14,11 @@ import { handleCopyFeedback, isCopyThread } from "@/lib/copy-feedback";
 import { supabase } from "@/lib/supabase";
 import { extractVoiceProfile, getVoiceProfileByChannel } from "@/lib/voice-profile";
 import { generateCopy } from "@/lib/generate-copy";
+import { classifyUploadIntent, analyzeCompetitorAd } from "@/lib/analyze-competitor";
 import { friendlyError } from "@/lib/anthropic";
 import {
   formatVariantsForSlack,
+  formatCompetitorAnalysisForSlack,
   formatWelcomeMessage,
   formatTeamMemberWelcome,
 } from "@/lib/format-slack";
@@ -342,7 +344,7 @@ async function finishOnboarding(
     // Post the "you're ready" confirmation
     await postMessage(
       channelId,
-      "Your brand profile is ready. Upload any video or audio ad to this channel and I'll generate 4 copy variants in your voice.\n\nYou can also send me context anytime — pricing changes, new taglines, words to avoid. I learn from every message and get better over time.",
+      "Your brand profile is ready. Upload any video, audio, or image ad to this channel and I'll generate 4 copy variants in your voice.\n\nYou can also send competitor ads with a message about what you like — I'll break them down and create a brief your team can execute in your style.\n\nSend me brand context anytime — pricing changes, new taglines, words to avoid. I learn from every message and get better over time.",
       threadTs
     );
   } catch (err) {
@@ -461,26 +463,46 @@ async function handleFileShared(
       sourceType = "video";
     }
 
-    // Update status → writing copy
-    if (statusTs) await updateMessage(channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
+    // Detect intent: is this a competitor ad or the user's own creative?
+    const intent = await classifyUploadIntent(userNotes);
 
-    // Generate copy
-    const variants = await generateCopy(
-      userId,
-      contentDescription,
-      filename,
-      channelId,
-      messageTs,
-      sourceType,
-      userNotes || undefined
-    );
+    if (intent === "competitor") {
+      // ─── Competitor Ad Analysis flow ───
+      if (statusTs) await updateMessage(channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
 
-    // Remove the status message and post results
-    if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your copy:").catch(() => {});
+      const analysis = await analyzeCompetitorAd(
+        contentDescription,
+        sourceType,
+        userNotes,
+        channelId,
+        userId,
+        messageTs,
+        filename
+      );
 
-    // Post formatted variants with feedback instructions
-    const formatted = formatVariantsForSlack(variants, filename);
-    await postMessage(channelId, formatted, messageTs);
+      if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your competitive analysis:").catch(() => {});
+
+      const formatted = formatCompetitorAnalysisForSlack(analysis, filename);
+      await postMessage(channelId, formatted, messageTs);
+    } else {
+      // ─── Standard Copy Generation flow (existing behavior) ───
+      if (statusTs) await updateMessage(channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
+
+      const variants = await generateCopy(
+        userId,
+        contentDescription,
+        filename,
+        channelId,
+        messageTs,
+        sourceType,
+        userNotes || undefined
+      );
+
+      if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your copy:").catch(() => {});
+
+      const formatted = formatVariantsForSlack(variants, filename);
+      await postMessage(channelId, formatted, messageTs);
+    }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error("Error processing file:", errMsg);

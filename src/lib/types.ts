@@ -89,3 +89,10 @@ export interface VoiceProfile {
   cta_language: string;
   full_context: string;
 }
+
+export interface CompetitorAnalysis {
+  what_works: string;
+  your_brief: string;
+  copy_direction: string;
+  mockup_url?: string;
+}

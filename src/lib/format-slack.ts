@@ -1,4 +1,4 @@
-import type { CopyVariant } from "./types";
+import type { CopyVariant, CompetitorAnalysis } from "./types";
 
 /**
  * Format copy variants into a readable Slack message with feedback instructions.
@@ -35,16 +35,19 @@ Want changes? Reply in this thread with feedback — I'll revise and remember fo
 export function formatWelcomeMessage(): string {
   return `*Welcome to Understood*
 
-I turn your video ads into perfectly voiced Meta ad copy. Here's how to get started:
+I turn your ad creatives into perfectly voiced Meta ad copy — and I can analyze competitor ads to help you make your own version. Here's how to get started:
 
 *Step 1: Build your brand profile (~3 minutes)*
-Say *setup* and I'll learn about your brand through a quick interview. This is the first thing you need to do before I can write copy for you.
+Say *setup* and I'll learn about your brand through a quick interview. This is the first thing you need to do before I can work with you.
 
-*Step 2: Upload videos and get ad copy*
-Once your profile is built, upload any video or audio ad to this channel. I'll transcribe it and write 4 copy variants in your brand voice.
+*Step 2: Upload your creatives for ad copy*
+Upload any video, audio, or image ad to this channel. I'll analyze it and write 4 copy variants in your brand voice.
 
-*Step 3: Keep improving*
-Send me anything about your brand — pricing changes, new taglines, tone preferences, words to avoid. I learn from every message and get better over time. You can also give feedback on any copy I write and I'll revise it.
+*Step 3: Send competitor ads for creative briefs*
+See an ad you love? Drop a screenshot or screen recording with a message about what you like — _"Love the visual style, how would we do this?"_ — and I'll give you a full creative brief your team can execute, plus a rough mockup for image ads.
+
+*Step 4: Keep improving*
+Send me brand context anytime — pricing changes, new taglines, tone preferences, words to avoid. I learn from every message and get better over time.
 
 *Commands:*
 • *setup* — Build your brand profile
@@ -58,9 +61,10 @@ Send me anything about your brand — pricing changes, new taglines, tone prefer
 export function formatHelpMessage(): string {
   return `*How to use Understood:*
 
-• Upload a video or audio ad → I'll generate 4 copy variants in your brand voice
+• Upload your ad creative → I'll generate 4 copy variants in your brand voice
+• Upload a competitor ad + a message about what you like → I'll create a creative brief your team can execute, with a mockup for image ads
 • Send brand context (pricing, tone, phrases) → I'll remember it for future copy
-• Reply to copy with feedback → I'll revise and learn for next time
+• Reply to any output with feedback → I'll revise and learn for next time
 
 *Commands:*
 • *setup* — Build your brand profile
@@ -100,6 +104,42 @@ ${angles.map((a, i) => `  ${i + 1}. ${typeof a === "string" ? a : JSON.stringify
 
 ———————————————————
 ${notesCount} brand note${notesCount === 1 ? "" : "s"} accumulated · ${generationCount} video${generationCount === 1 ? "" : "s"} processed`;
+}
+
+/**
+ * Format a competitor analysis result for Slack.
+ */
+export function formatCompetitorAnalysisForSlack(
+  analysis: CompetitorAnalysis,
+  filename: string
+): string {
+  let output = `*Competitor Ad Analysis — ${filename}*\n\n`;
+
+  output += `*What Makes This Ad Work*\n${analysis.what_works}\n\n`;
+  output += `———————————————————\n\n`;
+  output += `*Your Brief*\n${analysis.your_brief}\n\n`;
+  output += `———————————————————\n\n`;
+  output += `*Copy Direction*\n${analysis.copy_direction}\n\n`;
+
+  output += `———————————————————\n\n`;
+  output += `Want changes? Reply in this thread with feedback — tell me what to adjust and I'll revise the brief.`;
+
+  return output;
+}
+
+/**
+ * Format the "new capability" announcement for existing channels.
+ */
+export function formatNewCapabilityAnnouncement(): string {
+  return `*New Capability*
+
+I can now analyze competitor ads and turn them into a creative brief for your brand.
+
+Drop a screenshot, screen recording, or image of any ad that catches your eye, and tell me what you like (or don't like) about it. I'll break down why it works and give you a production-ready brief your team can execute — in your voice, with your brand.
+
+For static image ads, I'll also generate a rough mockup of what your version might look like.
+
+Just upload the ad with a message like: _"Love the visual style here — how would we do something like this?"_`;
 }
 
 /**
