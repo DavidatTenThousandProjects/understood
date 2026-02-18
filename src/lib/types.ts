@@ -94,5 +94,4 @@ export interface CompetitorAnalysis {
   what_works: string;
   your_brief: string;
   copy_direction: string;
-  mockup_url?: string;
 }

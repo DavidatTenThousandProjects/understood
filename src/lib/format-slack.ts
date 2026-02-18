@@ -44,7 +44,7 @@ Say *setup* and I'll learn about your brand through a quick interview. This is t
 Upload any video, audio, or image ad to this channel. I'll analyze it and write 4 copy variants in your brand voice.
 
 *Step 3: Send competitor ads for creative briefs*
-See an ad you love? Drop a screenshot or screen recording with a message about what you like — _"Love the visual style, how would we do this?"_ — and I'll give you a full creative brief your team can execute, plus a rough mockup for image ads.
+See an ad you love? Drop a screenshot or screen recording with a message about what you like — _"Love the visual style, how would we do this?"_ — and I'll break down why it works and give your team a production-ready creative brief.
 
 *Step 4: Keep improving*
 Send me brand context anytime — pricing changes, new taglines, tone preferences, words to avoid. I learn from every message and get better over time.
@@ -62,7 +62,7 @@ export function formatHelpMessage(): string {
   return `*How to use Understood:*
 
 • Upload your ad creative → I'll generate 4 copy variants in your brand voice
-• Upload a competitor ad + a message about what you like → I'll create a creative brief your team can execute, with a mockup for image ads
+• Upload a competitor ad + a message about what you like → I'll break it down and create a production brief your team can execute
 • Send brand context (pricing, tone, phrases) → I'll remember it for future copy
 • Reply to any output with feedback → I'll revise and learn for next time
 
@@ -120,12 +120,6 @@ export function formatCompetitorAnalysisForSlack(
   output += `*Your Brief*\n${analysis.your_brief}\n\n`;
   output += `———————————————————\n\n`;
   output += `*Copy Direction*\n${analysis.copy_direction}\n\n`;
-
-  if (analysis.mockup_url) {
-    output += `———————————————————\n\n`;
-    output += `*Directional Mockup*\nThis is a rough AI-generated concept — hand it to your designer as a starting point, not a final asset.\n${analysis.mockup_url}\n\n`;
-  }
-
   output += `———————————————————\n\n`;
   output += `Want changes? Reply in this thread with feedback — tell me what to adjust and I'll revise the brief.`;
 
@@ -141,8 +135,6 @@ export function formatNewCapabilityAnnouncement(): string {
 I can now analyze competitor ads and turn them into a creative brief for your brand.
 
 Drop a screenshot, screen recording, or image of any ad that catches your eye, and tell me what you like (or don't like) about it. I'll break down why it works and give you a production-ready brief your team can execute — in your voice, with your brand.
-
-For static image ads, I'll also generate a rough mockup of what your version might look like.
 
 Just upload the ad with a message like: _"Love the visual style here — how would we do something like this?"_`;
 }

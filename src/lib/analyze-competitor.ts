@@ -3,11 +3,6 @@ import { supabase } from "./supabase";
 import { sanitize } from "./sanitize";
 import { getBrandNotes } from "./context";
 import type { CompetitorAnalysis } from "./types";
-import OpenAI from "openai";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
 
 /**
  * Classify whether a file upload is the user's own creative (for copy generation)
@@ -154,19 +149,6 @@ Primary Text:
     copy_direction: copyDirection,
   };
 
-  // Generate a mockup for static image ads
-  if (sourceType === "image") {
-    try {
-      const mockupUrl = await generateMockup(yourBrief, profile);
-      if (mockupUrl) {
-        analysis.mockup_url = mockupUrl;
-      }
-    } catch (err) {
-      console.error("Mockup generation failed (non-fatal):", err);
-      // Continue without mockup — the brief is the real value
-    }
-  }
-
   // Save to generations table for thread feedback support
   await supabase.from("generations").insert({
     slack_user_id: slackUserId,
@@ -182,30 +164,6 @@ Primary Text:
   return analysis;
 }
 
-/**
- * Generate a rough AI mockup of what the brand's version of the ad might look like.
- * Uses DALL-E 3 for image generation. Returns a temporary URL (~1hr) that Slack
- * will cache when it unfurls the message.
- */
-async function generateMockup(
-  brief: string,
-  profile: Record<string, unknown>
-): Promise<string | null> {
-  const response = await openai.images.generate({
-    model: "dall-e-3",
-    prompt: `Create a professional social media ad mockup for a brand called "${profile.name || "the brand"}".
-
-Based on this creative brief:
-${brief.slice(0, 1500)}
-
-Style: Clean, modern social media ad. Professional marketing creative. Square format (1080x1080). The image should look like a polished Instagram or Facebook ad.`,
-    n: 1,
-    size: "1024x1024",
-    quality: "standard",
-  });
-
-  return response.data?.[0]?.url || null;
-}
 
 /**
  * Extract a section from the response between two markers.
