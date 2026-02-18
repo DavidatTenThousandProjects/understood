@@ -2,7 +2,6 @@ import { anthropic } from "./anthropic";
 import { supabase } from "./supabase";
 import { sanitize } from "./sanitize";
 import { getBrandNotes } from "./context";
-import { slackClient } from "./slack";
 import type { CompetitorAnalysis } from "./types";
 import OpenAI from "openai";
 
@@ -155,23 +154,15 @@ Primary Text:
     copy_direction: copyDirection,
   };
 
-  // Generate a mockup for static image ads and upload it to the Slack thread
+  // Generate a mockup for static image ads
   if (sourceType === "image") {
     try {
-      const mockupBuffer = await generateMockup(yourBrief, profile);
-      if (mockupBuffer) {
-        await slackClient.files.uploadV2({
-          channel_id: channelId,
-          thread_ts: messageTs,
-          file: mockupBuffer,
-          filename: `mockup-${filename.replace(/\.[^.]+$/, "")}.png`,
-          title: "Directional Mockup — hand this to your designer as a starting point",
-          initial_comment: "*Directional Mockup*\nThis is a rough AI-generated concept — a starting point, not a final asset.",
-        });
-        analysis.mockup_url = "uploaded_to_thread";
+      const mockupUrl = await generateMockup(yourBrief, profile);
+      if (mockupUrl) {
+        analysis.mockup_url = mockupUrl;
       }
     } catch (err) {
-      console.error("Mockup generation/upload failed (non-fatal):", err);
+      console.error("Mockup generation failed (non-fatal):", err);
       // Continue without mockup — the brief is the real value
     }
   }
@@ -193,32 +184,27 @@ Primary Text:
 
 /**
  * Generate a rough AI mockup of what the brand's version of the ad might look like.
- * Uses GPT-4o image generation — better at text, layout, and following ad briefs than DALL-E.
- * Returns a PNG buffer for uploading to Slack.
+ * Uses DALL-E 3 for image generation. Returns a temporary URL (~1hr) that Slack
+ * will cache when it unfurls the message.
  */
 async function generateMockup(
   brief: string,
   profile: Record<string, unknown>
-): Promise<Buffer | null> {
-  const response = await openai.responses.create({
-    model: "gpt-4o",
-    input: `Create a professional social media ad mockup for a brand called "${profile.name || "the brand"}".
+): Promise<string | null> {
+  const response = await openai.images.generate({
+    model: "dall-e-3",
+    prompt: `Create a professional social media ad mockup for a brand called "${profile.name || "the brand"}".
 
 Based on this creative brief:
 ${brief.slice(0, 1500)}
 
-Style: Clean, modern social media ad. Professional marketing creative. Square format (1080x1080). The image should look like a polished Instagram or Facebook ad. Make any text in the image legible and well-designed.`,
-    tools: [{ type: "image_generation", size: "1024x1024", quality: "medium" }],
+Style: Clean, modern social media ad. Professional marketing creative. Square format (1080x1080). The image should look like a polished Instagram or Facebook ad.`,
+    n: 1,
+    size: "1024x1024",
+    quality: "standard",
   });
 
-  // Extract the generated image from the response
-  for (const item of response.output) {
-    if (item.type === "image_generation_call" && item.result) {
-      return Buffer.from(item.result, "base64");
-    }
-  }
-
-  return null;
+  return response.data?.[0]?.url || null;
 }
 
 /**

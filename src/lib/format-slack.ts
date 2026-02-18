@@ -121,6 +121,11 @@ export function formatCompetitorAnalysisForSlack(
   output += `———————————————————\n\n`;
   output += `*Copy Direction*\n${analysis.copy_direction}\n\n`;
 
+  if (analysis.mockup_url) {
+    output += `———————————————————\n\n`;
+    output += `*Directional Mockup*\nThis is a rough AI-generated concept — hand it to your designer as a starting point, not a final asset.\n${analysis.mockup_url}\n\n`;
+  }
+
   output += `———————————————————\n\n`;
   output += `Want changes? Reply in this thread with feedback — tell me what to adjust and I'll revise the brief.`;
 
