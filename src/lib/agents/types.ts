@@ -10,6 +10,8 @@ import type { VoiceProfile, CopyVariant, CompetitorAnalysis } from "../types";
 
 export interface EventContext {
   type: "message" | "file_upload" | "command" | "member_joined";
+  teamId: string;
+  botUserId: string;
   userId: string;
   channelId: string;
   text: string;

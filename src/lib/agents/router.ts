@@ -14,15 +14,13 @@ import { parseCommand } from "../commands";
 import { extractUrl } from "../fetch-url-media";
 import type { EventContext, RouteDecision, AgentName } from "./types";
 
-const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
-
 /**
  * Route an event to the appropriate agent.
  */
 export async function routeEvent(ctx: EventContext): Promise<RouteDecision | null> {
   // ─── member_joined ───
   if (ctx.type === "member_joined") {
-    const isBotJoin = ctx.userId === BOT_USER_ID;
+    const isBotJoin = ctx.userId === ctx.botUserId;
     return { agent: "welcome", meta: { isBotJoin } };
   }
 

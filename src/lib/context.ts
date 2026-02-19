@@ -7,12 +7,14 @@ import { sanitize } from "./sanitize";
 export async function addBrandNote(
   channelId: string,
   slackUserId: string,
-  text: string
+  text: string,
+  teamId?: string
 ): Promise<void> {
   await supabase.from("brand_notes").insert({
     channel_id: channelId,
     slack_user_id: slackUserId,
     note: sanitize(text),
+    ...(teamId ? { team_id: teamId } : {}),
   });
 }
 

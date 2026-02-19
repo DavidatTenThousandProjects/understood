@@ -3,7 +3,7 @@
  *
  * One function that assembles everything an agent needs to know about a channel.
  * Replaces duplicate Supabase queries scattered across generate-copy, copy-feedback,
- * analyze-competitor, and route.ts.
+ * and route.ts.
  */
 
 import { supabase } from "../supabase";
@@ -12,13 +12,13 @@ import { getThreadReplies } from "../slack";
 import type { VoiceProfile } from "../types";
 import type { BrandContext, GenerationRecord } from "./types";
 
-const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
-
 /**
  * Assemble full brand context for a channel, optionally scoped to a thread.
  */
 export async function getBrandContext(
   channelId: string,
+  teamId: string,
+  botUserId: string,
   threadTs?: string
 ): Promise<BrandContext> {
   // Run independent queries in parallel
@@ -31,7 +31,7 @@ export async function getBrandContext(
 
   // Thread history only if we're in a thread
   const threadHistory = threadTs
-    ? await fetchThreadHistory(channelId, threadTs)
+    ? await fetchThreadHistory(channelId, threadTs, teamId, botUserId)
     : null;
 
   // Determine channel maturity
@@ -110,15 +110,17 @@ async function fetchLearnings(channelId: string): Promise<string | null> {
 
 async function fetchThreadHistory(
   channelId: string,
-  threadTs: string
+  threadTs: string,
+  teamId: string,
+  botUserId: string
 ): Promise<string | null> {
   try {
-    const messages = await getThreadReplies(channelId, threadTs);
+    const messages = await getThreadReplies(teamId, channelId, threadTs);
 
     const humanMessages = messages
       .filter((m) => {
         const msg = m as { user?: string; bot_id?: string; ts?: string };
-        return msg.user !== BOT_USER_ID && !msg.bot_id && msg.ts !== threadTs;
+        return msg.user !== botUserId && !msg.bot_id && msg.ts !== threadTs;
       })
       .map((m) => {
         const msg = m as { text?: string };

@@ -8,7 +8,8 @@ import { sanitize, wrapUserContent } from "./sanitize";
  */
 export async function extractVoiceProfile(
   slackUserId: string,
-  channelId: string
+  channelId: string,
+  teamId?: string
 ): Promise<{
   profile: Record<string, unknown>;
   summary: string;
@@ -133,6 +134,7 @@ OFFER: ${sanitize(customer.price_and_offer || "")}`;
       customer_id: customer.id,
       slack_user_id: slackUserId,
       channel_id: channelId,
+      ...(teamId ? { team_id: teamId } : {}),
       name: customer.business_name || "Default",
       raw_examples: customer.copy_examples || customer.customer_research || "",
       headline_patterns: profile.headline_patterns,

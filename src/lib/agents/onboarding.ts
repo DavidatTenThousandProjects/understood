@@ -13,7 +13,6 @@
 
 import { supabase } from "../supabase";
 import { sanitize } from "../sanitize";
-import { postMessage } from "../slack";
 import { extractVoiceProfile } from "../voice-profile";
 import type { EventContext, BrandContext, AgentResult } from "./types";
 
@@ -64,7 +63,7 @@ export async function onboardingAgent(
 ): Promise<AgentResult> {
   if (!ctx.text) return { messages: [] };
 
-  const customer = await getOrCreateCustomer(ctx.userId);
+  const customer = await getOrCreateCustomer(ctx.userId, ctx.teamId);
 
   // Already completed — shouldn't be here
   if (customer.onboarding_complete) {
@@ -152,7 +151,7 @@ export async function onboardingAgent(
 
       // Trigger voice profile extraction
       try {
-        const { summary } = await extractVoiceProfile(ctx.userId, ctx.channelId);
+        const { summary } = await extractVoiceProfile(ctx.userId, ctx.channelId, ctx.teamId);
 
         return {
           messages: [
@@ -237,7 +236,7 @@ export async function onboardingAgent(
 export async function startOnboardingInThread(
   ctx: EventContext
 ): Promise<AgentResult> {
-  const customer = await getOrCreateCustomer(ctx.userId);
+  const customer = await getOrCreateCustomer(ctx.userId, ctx.teamId);
 
   // If actively mid-onboarding, don't restart
   if (customer.onboarding_step > 0 && !customer.onboarding_complete) {
@@ -306,7 +305,7 @@ export async function isOnboardingThread(
 
 // ─── Helpers ───
 
-async function getOrCreateCustomer(slackUserId: string) {
+async function getOrCreateCustomer(slackUserId: string, teamId: string) {
   const { data: existing } = await supabase
     .from("customers")
     .select("*")
@@ -317,7 +316,7 @@ async function getOrCreateCustomer(slackUserId: string) {
 
   const { data: created, error } = await supabase
     .from("customers")
-    .insert({ slack_user_id: slackUserId })
+    .insert({ slack_user_id: slackUserId, team_id: teamId })
     .select()
     .single();
 

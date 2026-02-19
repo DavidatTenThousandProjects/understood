@@ -8,8 +8,6 @@
 import type { SlackEvent } from "../types";
 import type { EventContext, FileContext } from "./types";
 
-const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
-
 const VIDEO_EXTENSIONS = ["mp4", "mp3", "m4a", "wav", "webm", "mov", "ogg", "flac"];
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
 
@@ -17,12 +15,17 @@ const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
  * Normalize a raw Slack event into an EventContext.
  * Returns null for events we should ignore (bot's own messages, subtypes, etc.).
  */
-export function normalizeEvent(event: SlackEvent): EventContext | null {
+export function normalizeEvent(
+  event: SlackEvent,
+  teamId: string,
+  botUserId: string
+): EventContext | null {
   // ─── member_joined_channel ───
   if (event.type === "member_joined_channel") {
-    const isBotJoin = event.user === BOT_USER_ID;
     return {
       type: "member_joined",
+      teamId,
+      botUserId,
       userId: event.user,
       channelId: event.channel,
       text: "",
@@ -39,6 +42,8 @@ export function normalizeEvent(event: SlackEvent): EventContext | null {
   if (event.type === "file_shared") {
     return {
       type: "file_upload",
+      teamId,
+      botUserId,
       userId: event.user_id,
       channelId: event.channel_id,
       text: "", // Will be enriched by dispatcher via getMessage()
@@ -61,6 +66,8 @@ export function normalizeEvent(event: SlackEvent): EventContext | null {
 
     return {
       type: "message",
+      teamId,
+      botUserId,
       userId: event.user,
       channelId: event.channel,
       text: event.text || "",

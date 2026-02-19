@@ -25,7 +25,7 @@ export async function learningAgent(
   brand: BrandContext
 ): Promise<AgentResult> {
   try {
-    await analyzeFeedbackPatterns(ctx.channelId);
+    await analyzeFeedbackPatterns(ctx.channelId, ctx.teamId);
   } catch (err) {
     console.error("Learning agent error:", err);
   }
@@ -37,7 +37,7 @@ export async function learningAgent(
 /**
  * Analyze all feedback patterns for a channel and produce structured learnings.
  */
-async function analyzeFeedbackPatterns(channelId: string): Promise<void> {
+async function analyzeFeedbackPatterns(channelId: string, teamId: string): Promise<void> {
   // Fetch recent generations with their feedback (via brand_notes)
   const { data: generations } = await supabase
     .from("generations")
@@ -134,6 +134,7 @@ Return ONLY valid JSON. No explanation.`;
     // Insert new learnings
     const rows = insights.map((i) => ({
       channel_id: channelId,
+      team_id: teamId,
       category: i.category,
       insight: i.insight,
       confidence: Math.min(Math.max(i.confidence, 0), 1),

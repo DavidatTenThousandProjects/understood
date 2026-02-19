@@ -10,7 +10,7 @@
  * 6. Queue Learning Agent if flagged
  */
 
-import { postMessage, updateMessage } from "../slack";
+import { postMessage } from "../slack";
 import { addBrandNote } from "../context";
 import { supabase } from "../supabase";
 import { friendlyError } from "../anthropic";
@@ -39,6 +39,8 @@ export async function dispatch(
     // 1. Assemble brand context
     const brand = await getBrandContext(
       ctx.channelId,
+      ctx.teamId,
+      ctx.botUserId,
       ctx.threadTs || undefined
     );
 
@@ -57,12 +59,12 @@ export async function dispatch(
 
     // 5. Post messages to Slack
     for (const msg of checked.messages) {
-      await postMessage(msg.channel, msg.text, msg.threadTs);
+      await postMessage(ctx.teamId, msg.channel, msg.text, msg.threadTs);
     }
 
     // 6. Execute side effects
     if (checked.sideEffects) {
-      await executeSideEffects(checked.sideEffects);
+      await executeSideEffects(checked.sideEffects, ctx.teamId);
     }
 
     // 7. Trigger Learning Agent if flagged
@@ -81,13 +83,13 @@ export async function dispatch(
     // Post friendly error to Slack
     const errorMsg = friendlyError(error);
     const threadTs = ctx.threadTs || (ctx.rawEvent as Record<string, unknown>)?.ts as string | undefined;
-    await postMessage(ctx.channelId, errorMsg, threadTs || undefined).catch(() => {});
+    await postMessage(ctx.teamId, ctx.channelId, errorMsg, threadTs || undefined).catch(() => {});
   }
 }
 
 // ─── Side Effect Execution ───
 
-async function executeSideEffects(effects: SideEffect[]): Promise<void> {
+async function executeSideEffects(effects: SideEffect[], teamId: string): Promise<void> {
   for (const effect of effects) {
     try {
       switch (effect.type) {
@@ -95,12 +97,16 @@ async function executeSideEffects(effects: SideEffect[]): Promise<void> {
           await addBrandNote(
             effect.payload.channelId as string,
             effect.payload.slackUserId as string,
-            effect.payload.text as string
+            effect.payload.text as string,
+            teamId
           );
           break;
 
         case "save_generation":
-          await supabase.from("generations").insert(effect.payload);
+          await supabase.from("generations").insert({
+            ...effect.payload,
+            team_id: teamId,
+          });
           break;
 
         case "update_profile":

@@ -7,11 +7,8 @@
  * - Human joins without profile → generic welcome pointing to pinned message
  */
 
-import { pinMessage } from "../slack";
 import { formatWelcomeMessage, formatTeamMemberWelcome } from "../format-slack";
 import type { EventContext, BrandContext, AgentResult } from "./types";
-
-const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
 
 /**
  * Welcome agent handler.
@@ -21,7 +18,7 @@ export async function welcomeAgent(
   brand: BrandContext,
   meta?: Record<string, unknown>
 ): Promise<AgentResult> {
-  const isBotJoin = meta?.isBotJoin === true || ctx.userId === BOT_USER_ID;
+  const isBotJoin = meta?.isBotJoin === true || ctx.userId === ctx.botUserId;
 
   if (isBotJoin) {
     return handleBotJoined(ctx);

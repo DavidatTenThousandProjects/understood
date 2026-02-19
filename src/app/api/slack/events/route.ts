@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { verifySlackRequest } from "@/lib/verify-slack";
 import { supabase } from "@/lib/supabase";
 import {
+  getSlackClient,
   postMessage,
   updateMessage,
   getFileInfo,
@@ -36,8 +37,6 @@ import type { SlackUrlVerification, SlackEventCallback } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || "";
-
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
 
 // ─── Register all agents ───
@@ -53,10 +52,10 @@ registerAgent("learning", learningAgent);
 
 // ─── Deduplication ───
 
-async function isDuplicate(eventId: string): Promise<boolean> {
+async function isDuplicate(eventId: string, teamId?: string): Promise<boolean> {
   const { error } = await supabase
     .from("processed_events")
-    .insert({ event_id: eventId });
+    .insert({ event_id: eventId, ...(teamId ? { team_id: teamId } : {}) });
 
   if (error?.code === "23505") return true;
   if (error) console.error("Dedup check error:", error.message);
@@ -81,15 +80,18 @@ export async function POST(request: NextRequest) {
   }
 
   if (body.type === "event_callback") {
-    const { event, event_id } = body;
+    const { event, event_id, team_id } = body;
 
-    if (await isDuplicate(event_id)) {
+    if (await isDuplicate(event_id, team_id)) {
       return NextResponse.json({ ok: true });
     }
 
+    // Look up workspace to get botUserId
+    const { botUserId } = await getSlackClient(team_id);
+
     after(async () => {
       try {
-        await processEvent(event, event_id);
+        await processEvent(event, event_id, team_id, botUserId);
       } catch (err) {
         console.error("Event processing error:", err);
       }
@@ -101,15 +103,20 @@ export async function POST(request: NextRequest) {
 
 // ─── Event processing pipeline ───
 
-async function processEvent(event: unknown, eventId: string): Promise<void> {
+async function processEvent(
+  event: unknown,
+  eventId: string,
+  teamId: string,
+  botUserId: string
+): Promise<void> {
   // 1. Normalize
-  const ctx = normalizeEvent(event as import("@/lib/types").SlackEvent);
+  const ctx = normalizeEvent(event as import("@/lib/types").SlackEvent, teamId, botUserId);
   if (!ctx) return;
 
   // 2. Handle file uploads with enrichment (special path — needs file download + transcription)
   if (ctx.type === "file_upload") {
     const rawEvent = ctx.rawEvent as { file_id: string; user_id: string; channel_id: string; event_ts: string };
-    await handleFileUpload(rawEvent.file_id, ctx.userId, ctx.channelId, rawEvent.event_ts);
+    await handleFileUpload(teamId, botUserId, rawEvent.file_id, ctx.userId, ctx.channelId, rawEvent.event_ts);
     return;
   }
 
@@ -119,7 +126,7 @@ async function processEvent(event: unknown, eventId: string): Promise<void> {
     if (url && ctx.text.trim().length > 10) {
       const competitorSignals = /love\s*(this|the|that)|inspired|competitor|saw\s*this|how\s*would|break.*down|analy[zs]|style|this\s*ad/i;
       if (competitorSignals.test(ctx.text)) {
-        await handleCompetitorLink(ctx.userId, ctx.channelId, ctx.text, url, ctx.parentTs || "");
+        await handleCompetitorLink(teamId, botUserId, ctx.userId, ctx.channelId, ctx.text, url, ctx.parentTs || "");
         return;
       }
     }
@@ -129,7 +136,7 @@ async function processEvent(event: unknown, eventId: string): Promise<void> {
   if (ctx.type === "message" && !ctx.isThread && !ctx.isDM) {
     const lower = ctx.text.toLowerCase().trim();
     if (lower === "setup" || lower === "new setup") {
-      await handleSetupCommand(ctx.userId, ctx.channelId, ctx.parentTs || "", lower === "new setup");
+      await handleSetupCommand(teamId, botUserId, ctx.userId, ctx.channelId, ctx.parentTs || "", lower === "new setup");
       return;
     }
   }
@@ -142,9 +149,9 @@ async function processEvent(event: unknown, eventId: string): Promise<void> {
   if (route.agent === "welcome" && route.meta?.isBotJoin) {
     const result = await welcomeAgent(ctx, { profile: null, brandNotes: "", threadHistory: null, generation: null, learnings: null, channelMaturity: "new" });
     for (const msg of result.messages) {
-      const posted = await postMessage(msg.channel, msg.text, msg.threadTs);
+      const posted = await postMessage(teamId, msg.channel, msg.text, msg.threadTs);
       if (posted?.ts) {
-        try { await pinMessage(msg.channel, posted.ts); } catch {}
+        try { await pinMessage(teamId, msg.channel, posted.ts); } catch {}
       }
     }
     return;
@@ -156,6 +163,8 @@ async function processEvent(event: unknown, eventId: string): Promise<void> {
 // ─── File upload handler (needs enrichment before routing) ───
 
 async function handleFileUpload(
+  teamId: string,
+  botUserId: string,
   fileId: string,
   userId: string,
   channelId: string,
@@ -165,7 +174,7 @@ async function handleFileUpload(
   let messageTs = eventTs;
 
   try {
-    const file = await getFileInfo(fileId);
+    const file = await getFileInfo(teamId, fileId);
     if (!file) return;
 
     // Get actual message ts from file shares
@@ -178,7 +187,7 @@ async function handleFileUpload(
     // Get user notes from the message
     let userNotes = "";
     try {
-      const msg = await getMessage(channelId, messageTs);
+      const msg = await getMessage(teamId, channelId, messageTs);
       if (msg?.text && msg.text.trim().length > 0) {
         userNotes = msg.text;
       }
@@ -193,7 +202,7 @@ async function handleFileUpload(
     const sizeMB = (file.size || 0) / (1024 * 1024);
     const maxSize = isImage ? 20 : 500;
     if (sizeMB > maxSize) {
-      await postMessage(channelId, `That file is ${sizeMB.toFixed(0)}MB — too large to process. Try a file under ${maxSize}MB.`, messageTs);
+      await postMessage(teamId, channelId, `That file is ${sizeMB.toFixed(0)}MB — too large to process. Try a file under ${maxSize}MB.`, messageTs);
       return;
     }
 
@@ -206,21 +215,21 @@ async function handleFileUpload(
       .single();
 
     if (!profile) {
-      await postMessage(channelId, "I don't have a brand profile for this channel yet. Say *setup* in this channel to get started — it takes about 3 minutes.", messageTs);
+      await postMessage(teamId, channelId, "I don't have a brand profile for this channel yet. Say *setup* in this channel to get started — it takes about 3 minutes.", messageTs);
       return;
     }
 
     // Post status
-    const statusMsg = await postMessage(channelId, isImage ? "Analyzing your ad creative..." : "Processing your video...", messageTs);
+    const statusMsg = await postMessage(teamId, channelId, isImage ? "Analyzing your ad creative..." : "Processing your video...", messageTs);
     statusTs = statusMsg?.ts;
 
     // Download file
     const downloadUrl = file.url_private_download || file.url_private;
     if (!downloadUrl) {
-      if (statusTs) await updateMessage(channelId, statusTs, "Couldn't access that file.").catch(() => {});
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Couldn't access that file.").catch(() => {});
       return;
     }
-    const fileBuffer = await downloadFile(downloadUrl as string);
+    const fileBuffer = await downloadFile(teamId, downloadUrl as string);
 
     // Analyze/Transcribe
     let contentDescription: string;
@@ -230,10 +239,10 @@ async function handleFileUpload(
       contentDescription = await analyzeAdImage(fileBuffer, filename);
       sourceType = "image";
     } else {
-      if (statusTs) await updateMessage(channelId, statusTs, "Transcribing audio...").catch(() => {});
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Transcribing audio...").catch(() => {});
       const transcript = await transcribeVideo(fileBuffer, filename);
       if (!transcript || transcript.trim().length === 0) {
-        if (statusTs) await updateMessage(channelId, statusTs, "I couldn't detect any speech in that video. Try a video with clear audio.").catch(() => {});
+        if (statusTs) await updateMessage(teamId, channelId, statusTs, "I couldn't detect any speech in that video. Try a video with clear audio.").catch(() => {});
         return;
       }
       contentDescription = transcript;
@@ -244,10 +253,12 @@ async function handleFileUpload(
     const intent = await classifyFileUploadIntent(userNotes);
 
     if (intent === "competitor") {
-      if (statusTs) await updateMessage(channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
 
       const ctx = {
         type: "file_upload" as const,
+        teamId,
+        botUserId,
         userId,
         channelId,
         text: userNotes,
@@ -264,10 +275,12 @@ async function handleFileUpload(
         meta: { transcript: contentDescription, sourceType, userNotes, filename, messageTs },
       });
     } else {
-      if (statusTs) await updateMessage(channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
 
       const ctx = {
         type: "file_upload" as const,
+        teamId,
+        botUserId,
         userId,
         channelId,
         text: userNotes,
@@ -285,18 +298,20 @@ async function handleFileUpload(
       });
     }
 
-    if (statusTs) await updateMessage(channelId, statusTs, "Done!").catch(() => {});
+    if (statusTs) await updateMessage(teamId, channelId, statusTs, "Done!").catch(() => {});
   } catch (error) {
     console.error("Error processing file:", error);
     const userMsg = friendlyError(error);
-    if (statusTs) await updateMessage(channelId, statusTs, userMsg).catch(() => {});
-    else await postMessage(channelId, userMsg, messageTs).catch(() => {});
+    if (statusTs) await updateMessage(teamId, channelId, statusTs, userMsg).catch(() => {});
+    else await postMessage(teamId, channelId, userMsg, messageTs).catch(() => {});
   }
 }
 
 // ─── Competitor link handler (needs URL fetching) ───
 
 async function handleCompetitorLink(
+  teamId: string,
+  botUserId: string,
   userId: string,
   channelId: string,
   text: string,
@@ -311,11 +326,11 @@ async function handleCompetitorLink(
     .single();
 
   if (!profile) {
-    await postMessage(channelId, "I don't have a brand profile for this channel yet. Say *setup* to get started — it takes about 3 minutes.", messageTs);
+    await postMessage(teamId, channelId, "I don't have a brand profile for this channel yet. Say *setup* to get started — it takes about 3 minutes.", messageTs);
     return;
   }
 
-  const statusMsg = await postMessage(channelId, "Fetching that ad...", messageTs);
+  const statusMsg = await postMessage(teamId, channelId, "Fetching that ad...", messageTs);
   const statusTs = statusMsg?.ts;
 
   try {
@@ -323,8 +338,8 @@ async function handleCompetitorLink(
 
     if (!media) {
       const fallbackMsg = "I couldn't grab the media from that link (the platform may have blocked it). Upload the ad directly instead:\n\n• *Image ad* — screenshot it and drop it here\n• *Video ad* — screen-record it and drop the recording here\n\n_On iPhone: swipe into Control Center → tap the screen record button → play the ad → stop recording → share to Slack._";
-      if (statusTs) await updateMessage(channelId, statusTs, fallbackMsg).catch(() => {});
-      else await postMessage(channelId, fallbackMsg, messageTs);
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, fallbackMsg).catch(() => {});
+      else await postMessage(teamId, channelId, fallbackMsg, messageTs);
       return;
     }
 
@@ -332,17 +347,17 @@ async function handleCompetitorLink(
     const sourceType = media.type;
 
     if (media.type === "image") {
-      if (statusTs) await updateMessage(channelId, statusTs, "Analyzing the ad creative...").catch(() => {});
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Analyzing the ad creative...").catch(() => {});
       contentDescription = await analyzeAdImage(media.buffer, media.filename);
     } else {
-      if (statusTs) await updateMessage(channelId, statusTs, "Transcribing the video...").catch(() => {});
+      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Transcribing the video...").catch(() => {});
       const transcript = await transcribeVideo(media.buffer, media.filename);
       if (!transcript || transcript.trim().length === 0) {
         if (media.pageDescription) {
           contentDescription = `Video ad (no speech detected). Page description: ${media.pageDescription}`;
         } else {
           const msg = "I got the video but couldn't detect any speech. Try screen-recording it so I can capture the audio better.";
-          if (statusTs) await updateMessage(channelId, statusTs, msg).catch(() => {});
+          if (statusTs) await updateMessage(teamId, channelId, statusTs, msg).catch(() => {});
           return;
         }
       } else {
@@ -356,10 +371,12 @@ async function handleCompetitorLink(
 
     const userCommentary = text.replace(/https?:\/\/[^\s>]+/gi, "").trim();
 
-    if (statusTs) await updateMessage(channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
+    if (statusTs) await updateMessage(teamId, channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
 
     const ctx = {
       type: "message" as const,
+      teamId,
+      botUserId,
       userId,
       channelId,
       text: userCommentary,
@@ -376,18 +393,20 @@ async function handleCompetitorLink(
       meta: { transcript: contentDescription, sourceType, userNotes: userCommentary, filename: url, messageTs },
     });
 
-    if (statusTs) await updateMessage(channelId, statusTs, "Done — here's your competitive analysis:").catch(() => {});
+    if (statusTs) await updateMessage(teamId, channelId, statusTs, "Done — here's your competitive analysis:").catch(() => {});
   } catch (error) {
     console.error("Error handling competitor link:", error);
     const errMsg = friendlyError(error);
-    if (statusTs) await updateMessage(channelId, statusTs, errMsg).catch(() => {});
-    else await postMessage(channelId, errMsg, messageTs).catch(() => {});
+    if (statusTs) await updateMessage(teamId, channelId, statusTs, errMsg).catch(() => {});
+    else await postMessage(teamId, channelId, errMsg, messageTs).catch(() => {});
   }
 }
 
 // ─── Setup command handler ───
 
 async function handleSetupCommand(
+  teamId: string,
+  botUserId: string,
   userId: string,
   channelId: string,
   messageTs: string,
@@ -406,6 +425,8 @@ async function handleSetupCommand(
       // Profile exists — dispatch to command agent which shows the "already set up" message
       const ctx = {
         type: "message" as const,
+        teamId,
+        botUserId,
         userId,
         channelId,
         text: "setup",
@@ -424,6 +445,8 @@ async function handleSetupCommand(
   // Start onboarding
   const ctx = {
     type: "message" as const,
+    teamId,
+    botUserId,
     userId,
     channelId,
     text: isNewSetup ? "new setup" : "setup",
@@ -437,6 +460,6 @@ async function handleSetupCommand(
 
   const result = await startOnboardingInThread(ctx);
   for (const msg of result.messages) {
-    await postMessage(msg.channel, msg.text, msg.threadTs);
+    await postMessage(teamId, msg.channel, msg.text, msg.threadTs);
   }
 }
