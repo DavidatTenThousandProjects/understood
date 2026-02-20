@@ -36,11 +36,10 @@ export default async function InstallPage({
       <div className="max-w-md text-center">
         <h1 className="text-4xl font-bold tracking-tight">Understood</h1>
         <p className="mt-4 text-lg text-gray-400">
-          AI-powered ad copy that learns your brand voice.
+          Slack-native AI tools that learn your brand and take action on it.
         </p>
         <p className="mt-2 text-sm text-gray-500">
-          Upload video or image ads, get Meta ad copy variants back.
-          Analyze competitor ads. Get smarter over time.
+          Generate ad copy from your videos and images. Analyze competitor ads and turn them into branded briefs. Every interaction makes your brand profile sharper.
         </p>
 
         <a

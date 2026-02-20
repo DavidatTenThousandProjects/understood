@@ -21,7 +21,7 @@ export default function SuccessPage() {
             <li>
               Say <code className="rounded bg-gray-800 px-1">setup</code> — takes about 3 minutes
             </li>
-            <li>Upload any video, audio, or image ad to generate copy</li>
+            <li>Upload your own ads for copy, or send competitor ads for analysis</li>
           </ol>
         </div>
       </div>
