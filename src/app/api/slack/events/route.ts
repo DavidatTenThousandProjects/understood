@@ -147,7 +147,7 @@ async function processEvent(
 
   // Handle welcome with pinning
   if (route.agent === "welcome" && route.meta?.isBotJoin) {
-    const result = await welcomeAgent(ctx, { profile: null, brandNotes: "", threadHistory: null, generation: null, learnings: null, channelMaturity: "new" });
+    const result = await welcomeAgent(ctx, { profile: null, brandNotes: "", threadHistory: null, generation: null, learnings: null, exemplars: null, channelMaturity: "new" });
     for (const msg of result.messages) {
       const posted = await postMessage(teamId, msg.channel, msg.text, msg.threadTs);
       if (posted?.ts) {
@@ -231,71 +231,92 @@ async function handleFileUpload(
     }
     const fileBuffer = await downloadFile(teamId, downloadUrl as string);
 
-    // Analyze/Transcribe
-    let contentDescription: string;
-    let sourceType: "video" | "image";
+    // Classify intent first (before analysis — saves time if competitor)
+    const intent = await classifyFileUploadIntent(userNotes);
+
+    // Media type mapping for multimodal
+    const MEDIA_TYPE_MAP: Record<string, string> = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      gif: "image/gif",
+      webp: "image/webp",
+    };
 
     if (isImage) {
-      contentDescription = await analyzeAdImage(fileBuffer, filename);
-      sourceType = "image";
+      const imageMediaType = MEDIA_TYPE_MAP[ext] || "image/png";
+
+      if (intent === "competitor") {
+        // Competitor analysis: use Sonnet Vision (analyzeAdImage) as before
+        if (statusTs) await updateMessage(teamId, channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
+        const contentDescription = await analyzeAdImage(fileBuffer, filename);
+
+        const ctx = {
+          type: "file_upload" as const,
+          teamId, botUserId, userId, channelId,
+          text: userNotes, threadTs: null, parentTs: messageTs,
+          fileInfo: buildFileContext(file as Record<string, unknown>),
+          isThread: false, isDM: false, rawEvent: {},
+        };
+
+        await dispatch(ctx, {
+          agent: "competitor_analysis",
+          meta: { transcript: contentDescription, sourceType: "image", userNotes, filename, messageTs },
+        });
+      } else {
+        // Copy generation: pass raw image buffer for Opus multimodal (no Sonnet intermediary)
+        if (statusTs) await updateMessage(teamId, channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
+
+        const ctx = {
+          type: "file_upload" as const,
+          teamId, botUserId, userId, channelId,
+          text: userNotes, threadTs: null, parentTs: messageTs,
+          fileInfo: buildFileContext(file as Record<string, unknown>),
+          isThread: false, isDM: false, rawEvent: {},
+        };
+
+        await dispatch(ctx, {
+          agent: "copy_generation",
+          meta: {
+            imageBuffer: fileBuffer,
+            imageMediaType,
+            sourceType: "image",
+            userNotes,
+            filename,
+            messageTs,
+          },
+        });
+      }
     } else {
+      // Video: transcribe first
       if (statusTs) await updateMessage(teamId, channelId, statusTs, "Transcribing audio...").catch(() => {});
       const transcript = await transcribeVideo(fileBuffer, filename);
       if (!transcript || transcript.trim().length === 0) {
         if (statusTs) await updateMessage(teamId, channelId, statusTs, "I couldn't detect any speech in that video. Try a video with clear audio.").catch(() => {});
         return;
       }
-      contentDescription = transcript;
-      sourceType = "video";
-    }
-
-    // Classify intent
-    const intent = await classifyFileUploadIntent(userNotes);
-
-    if (intent === "competitor") {
-      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
 
       const ctx = {
         type: "file_upload" as const,
-        teamId,
-        botUserId,
-        userId,
-        channelId,
-        text: userNotes,
-        threadTs: null,
-        parentTs: messageTs,
+        teamId, botUserId, userId, channelId,
+        text: userNotes, threadTs: null, parentTs: messageTs,
         fileInfo: buildFileContext(file as Record<string, unknown>),
-        isThread: false,
-        isDM: false,
-        rawEvent: {},
+        isThread: false, isDM: false, rawEvent: {},
       };
 
-      await dispatch(ctx, {
-        agent: "competitor_analysis",
-        meta: { transcript: contentDescription, sourceType, userNotes, filename, messageTs },
-      });
-    } else {
-      if (statusTs) await updateMessage(teamId, channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
-
-      const ctx = {
-        type: "file_upload" as const,
-        teamId,
-        botUserId,
-        userId,
-        channelId,
-        text: userNotes,
-        threadTs: null,
-        parentTs: messageTs,
-        fileInfo: buildFileContext(file as Record<string, unknown>),
-        isThread: false,
-        isDM: false,
-        rawEvent: {},
-      };
-
-      await dispatch(ctx, {
-        agent: "copy_generation",
-        meta: { transcript: contentDescription, sourceType, userNotes, filename, messageTs },
-      });
+      if (intent === "competitor") {
+        if (statusTs) await updateMessage(teamId, channelId, statusTs, "Analyzing this competitor ad...").catch(() => {});
+        await dispatch(ctx, {
+          agent: "competitor_analysis",
+          meta: { transcript, sourceType: "video", userNotes, filename, messageTs },
+        });
+      } else {
+        if (statusTs) await updateMessage(teamId, channelId, statusTs, "Writing copy in your brand voice...").catch(() => {});
+        await dispatch(ctx, {
+          agent: "copy_generation",
+          meta: { transcript, sourceType: "video", userNotes, filename, messageTs },
+        });
+      }
     }
 
     if (statusTs) await updateMessage(teamId, channelId, statusTs, "Done!").catch(() => {});

@@ -12,6 +12,9 @@ export { dispatch, registerAgent } from "./dispatcher";
 export { getBrandContext } from "./context";
 export { runQualityGate } from "./quality-gate";
 
+// Tools
+export { AGENT_TOOLS, executeSubmitVariant, executeReviewSet, executeFetchExemplars } from "./tools";
+
 // Agents
 export { commandAgent } from "./command";
 export { welcomeAgent } from "./welcome";
@@ -28,7 +31,10 @@ export type {
   FileContext,
   BrandContext,
   GenerationRecord,
+  CopyFeedbackRecord,
+  ExemplarRecord,
   AgentResult,
+  AgentLoopState,
   SlackMessage,
   SideEffect,
   AgentName,
@@ -36,4 +42,8 @@ export type {
   AgentHandler,
   QualityCheckResult,
   QualityIssue,
+  SubmitVariantInput,
+  ReviewSetInput,
+  FetchExemplarsInput,
+  ToolResult,
 } from "./types";

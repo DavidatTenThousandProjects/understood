@@ -10,7 +10,7 @@ import { supabase } from "../supabase";
 import { getBrandNotes } from "../context";
 import { getThreadReplies } from "../slack";
 import type { VoiceProfile } from "../types";
-import type { BrandContext, GenerationRecord } from "./types";
+import type { BrandContext, GenerationRecord, ExemplarRecord } from "./types";
 
 /**
  * Assemble full brand context for a channel, optionally scoped to a thread.
@@ -22,11 +22,12 @@ export async function getBrandContext(
   threadTs?: string
 ): Promise<BrandContext> {
   // Run independent queries in parallel
-  const [profile, brandNotes, generation, learnings] = await Promise.all([
+  const [profile, brandNotes, generation, learnings, exemplars] = await Promise.all([
     fetchVoiceProfile(channelId),
     getBrandNotes(channelId),
     threadTs ? fetchGeneration(channelId, threadTs) : Promise.resolve(null),
     fetchLearnings(channelId),
+    fetchExemplars(channelId),
   ]);
 
   // Thread history only if we're in a thread
@@ -43,6 +44,7 @@ export async function getBrandContext(
     threadHistory,
     generation,
     learnings,
+    exemplars,
     channelMaturity,
   };
 }
@@ -108,6 +110,39 @@ async function fetchLearnings(channelId: string): Promise<string | null> {
     .join("\n");
 }
 
+async function fetchExemplars(channelId: string): Promise<ExemplarRecord[] | null> {
+  try {
+    const { data } = await supabase
+      .from("exemplars")
+      .select("*")
+      .eq("channel_id", channelId)
+      .eq("active", true)
+      .order("score", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (!data || data.length === 0) return null;
+
+    return data.map((e) => ({
+      id: e.id,
+      teamId: e.team_id,
+      channelId: e.channel_id,
+      generationId: e.generation_id,
+      voiceProfileId: e.voice_profile_id,
+      variant: e.variant,
+      sourceType: e.source_type,
+      approvalReason: e.approval_reason,
+      sourceTranscriptSnippet: e.source_transcript_snippet,
+      score: e.score,
+      active: e.active,
+      createdAt: e.created_at,
+    }));
+  } catch {
+    // Table may not exist yet
+    return null;
+  }
+}
+
 async function fetchThreadHistory(
   channelId: string,
   threadTs: string,
@@ -117,22 +152,23 @@ async function fetchThreadHistory(
   try {
     const messages = await getThreadReplies(teamId, channelId, threadTs);
 
-    const humanMessages = messages
+    const formattedMessages = messages
       .filter((m) => {
-        const msg = m as { user?: string; bot_id?: string; ts?: string };
-        return msg.user !== botUserId && !msg.bot_id && msg.ts !== threadTs;
+        const msg = m as { ts?: string };
+        // Skip the parent message itself
+        return msg.ts !== threadTs;
       })
       .map((m) => {
-        const msg = m as { text?: string };
-        return msg.text || "";
+        const msg = m as { user?: string; bot_id?: string; text?: string };
+        const isBot = msg.user === botUserId || !!msg.bot_id;
+        const prefix = isBot ? "[Bot]" : "[User]";
+        return `${prefix} ${msg.text || ""}`;
       })
-      .filter((t) => t.length > 0);
+      .filter((t) => t.length > 6); // filter out "[Bot] " or "[User] " with no content
 
-    if (humanMessages.length === 0) return null;
+    if (formattedMessages.length === 0) return null;
 
-    return humanMessages
-      .map((f, i) => `Message ${i + 1}: ${f}`)
-      .join("\n");
+    return formattedMessages.join("\n");
   } catch {
     return null;
   }

@@ -40,6 +40,7 @@ export interface BrandContext {
   threadHistory: string | null;
   generation: GenerationRecord | null;
   learnings: string | null;
+  exemplars: ExemplarRecord[] | null;
   channelMaturity: "new" | "onboarding" | "active";
 }
 
@@ -65,7 +66,14 @@ export interface SlackMessage {
 }
 
 export interface SideEffect {
-  type: "add_brand_note" | "save_generation" | "update_profile" | "update_customer";
+  type:
+    | "add_brand_note"
+    | "save_generation"
+    | "update_profile"
+    | "update_customer"
+    | "save_copy_feedback"
+    | "save_exemplar"
+    | "update_generation_meta";
   payload: Record<string, unknown>;
 }
 
@@ -115,3 +123,70 @@ export type AgentHandler = (
   brand: BrandContext,
   meta?: Record<string, unknown>
 ) => Promise<AgentResult>;
+
+// ─── Copy Feedback ───
+
+export interface CopyFeedbackRecord {
+  id: string;
+  teamId: string;
+  channelId: string;
+  generationId: string;
+  variantNumber: number | null;
+  action: "approved" | "revised" | "rejected" | "clarification";
+  feedbackText: string | null;
+  originalVariant: CopyVariant | null;
+  revisedVariant: CopyVariant | null;
+  approvalReason: string | null;
+  slackUserId: string;
+  createdAt: string;
+}
+
+// ─── Exemplars ───
+
+export interface ExemplarRecord {
+  id: string;
+  teamId: string;
+  channelId: string;
+  generationId: string;
+  voiceProfileId: string;
+  variant: CopyVariant;
+  sourceType: "video" | "image";
+  approvalReason: string | null;
+  sourceTranscriptSnippet: string | null;
+  score: number;
+  active: boolean;
+  createdAt: string;
+}
+
+// ─── Agent Loop ───
+
+export interface AgentLoopState {
+  variants: CopyVariant[];
+  turns: number;
+  startTime: number;
+  qualityIssues: string[];
+  reviewPassed: boolean;
+}
+
+// ─── Agent Tool Definitions ───
+
+export interface SubmitVariantInput {
+  angle: string;
+  headline: string;
+  description: string;
+  primary_text: string;
+}
+
+export interface ReviewSetInput {
+  confirm: boolean;
+}
+
+export interface FetchExemplarsInput {
+  count?: number;
+}
+
+export interface ToolResult {
+  success: boolean;
+  message: string;
+  data?: unknown;
+}

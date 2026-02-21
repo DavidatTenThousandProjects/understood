@@ -123,6 +123,47 @@ async function executeSideEffects(effects: SideEffect[], teamId: string): Promis
             .eq("slack_user_id", effect.payload.slackUserId as string);
           break;
 
+        case "save_copy_feedback":
+          await supabase.from("copy_feedback").insert({
+            team_id: teamId,
+            channel_id: effect.payload.channelId as string,
+            generation_id: effect.payload.generationId as string,
+            variant_number: effect.payload.variantNumber as number | null,
+            action: effect.payload.action as string,
+            feedback_text: effect.payload.feedbackText as string | null,
+            original_variant: effect.payload.originalVariant || null,
+            revised_variant: effect.payload.revisedVariant || null,
+            approval_reason: effect.payload.approvalReason as string | null,
+            slack_user_id: effect.payload.slackUserId as string,
+          });
+          break;
+
+        case "save_exemplar":
+          await supabase.from("exemplars").insert({
+            team_id: teamId,
+            channel_id: effect.payload.channelId as string,
+            generation_id: effect.payload.generationId as string,
+            voice_profile_id: effect.payload.voiceProfileId as string,
+            variant: effect.payload.variant,
+            source_type: effect.payload.sourceType as string,
+            approval_reason: effect.payload.approvalReason as string | null,
+            source_transcript_snippet: effect.payload.sourceTranscriptSnippet as string | null,
+            score: (effect.payload.score as number) || 1.0,
+          });
+          break;
+
+        case "update_generation_meta":
+          await supabase
+            .from("generations")
+            .update({
+              agent_turns: effect.payload.agent_turns,
+              agent_duration_ms: effect.payload.agent_duration_ms,
+              quality_issues: effect.payload.quality_issues,
+            })
+            .eq("slack_channel_id", effect.payload.slack_channel_id as string)
+            .eq("slack_message_ts", effect.payload.slack_message_ts as string);
+          break;
+
         default:
           console.warn("Unknown side effect type:", effect.type);
       }
